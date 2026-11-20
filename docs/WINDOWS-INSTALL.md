@@ -5,7 +5,7 @@
 ## Tải và mở ứng dụng
 
 1. Máy cần **Windows 10/11 x64**, .NET Framework 4.8 và kết nối Internet.
-2. Mở [bản Windows ổn định](https://github.com/padduwcs/PADSwitcher/releases/latest),
+2. Mở [bản Windows ổn định](https://github.com/DongQuanz/PADSwitcher/releases/latest),
    mở **Assets**, tải `PADSwitcher-<version>-Windows.exe` và file `.sha256` cùng tên.
    Không chọn **Source code** nếu chỉ muốn sử dụng.
 3. Trong PowerShell tại thư mục tải về, kiểm tra mã SHA-256:

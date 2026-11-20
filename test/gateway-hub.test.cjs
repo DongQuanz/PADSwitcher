@@ -8,10 +8,20 @@ async function ready(t){
   for(const n of ['a','b','c','d'])profiles.push(await f.service.capture(auth(n)));
   const hub=new GatewayHub(f.service,{disableRouter:true,executable:'fixture-codex.exe',spawn:(_exe,args,opts)=>spawn(process.execPath,[path.join(__dirname,'mock-backend.cjs'),...args],opts)}),clients=[];
   t.after(async()=>{clients.forEach(c=>c.close());await hub.stop(true);for(const fn of cleanup)await fn();});await hub.start(profiles[0].id);
-  const client=async scope=>{const c=new WsRpc(await connect(hub.shared.url,hub.shared.frontToken));clients.push(c);await c.request('initialize',{clientInfo:{name:scope==='vscode'?'codex_vscode':scope==='cli'?'codex_cli_rs':'jetbrains'},...(scope==='jetbrains'?{_padswitcherClient:'jetbrains'}:{})});c.send({method:'initialized',params:{}});await pause(15);return c;};
+  const client=async(scope,name,initialized=true)=>{const c=new WsRpc(await connect(hub.shared.url,hub.shared.frontToken));clients.push(c);await c.request('initialize',{clientInfo:{name:name||(scope==='vscode'?'codex_vscode':scope==='cli'?'codex_cli_rs':'jetbrains')},...(scope==='jetbrains'?{_padswitcherClient:'jetbrains'}:{})});if(initialized)c.send({method:'initialized',params:{}});await pause(15);return c;};
   return {...f,hub,profiles,client};
 }
 const email=n=>'fixture-account-'+n+'@example.test';
+test('current editor names use the private VS Code account and report connected extensions',async t=>{
+  const {hub,profiles:[a,b],client}=await ready(t);
+  await hub.configure({scope:'vscode',mode:'private',profileId:b.id});
+  for(const name of ['VS Code','Cursor','Windsurf','codex_vscode','codex_vscode_copilot']){
+    const c=await client('vscode',name,false);
+    assert.equal((await c.request('account/read')).account.email,email('b'),name);
+  }
+  assert.equal(hub.view().connected.vscode,5);assert.equal(hub.view().connected.other,0);
+  assert.equal(hub.view().profileId,a.id);
+});
 test('one stable endpoint dispatches shared clients together and private clients to isolated native accounts',async t=>{
   const {hub,profiles:[a,b,c,d],client}=await ready(t);
   await hub.configure({scope:'vscode',mode:'private',profileId:a.id});await hub.configure({scope:'jetbrains',mode:'private',profileId:c.id});

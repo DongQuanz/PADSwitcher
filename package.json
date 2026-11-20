@@ -1,21 +1,27 @@
 {
   "name": "padswitcher",
-  "version": "1.21.0",
+  "version": "1.21.1",
   "description": "Profile Account Directory Switcher — Codex and Kaggle account manager for Windows",
   "private": true,
   "main": "src/main.cjs",
   "author": "Anh-Duc Phan",
+  "contributors": [
+    {
+      "name": "DongQuanz",
+      "url": "https://github.com/DongQuanz"
+    }
+  ],
   "license": "MIT",
-  "homepage": "https://github.com/padduwcs/PADSwitcher#readme",
+  "homepage": "https://github.com/DongQuanz/PADSwitcher#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/padduwcs/PADSwitcher.git"
+    "url": "git+https://github.com/DongQuanz/PADSwitcher.git"
   },
   "bugs": {
-    "url": "https://github.com/padduwcs/PADSwitcher/issues"
+    "url": "https://github.com/DongQuanz/PADSwitcher/issues"
   },
   "engines": {
-    "node": ">=24"
+    "node": "^24.15.0 || >=26.0.0"
   },
   "keywords": [
     "codex",
@@ -90,6 +96,7 @@
       "signExecutable": false
     },
     "portable": {
+      "unpackDirName": true,
       "artifactName": "PADSwitcher-${version}-Windows.exe"
     }
   },

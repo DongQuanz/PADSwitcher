@@ -15,6 +15,8 @@ concurrency:
 jobs:
   release:
     runs-on: windows-latest
+    env:
+      GH_REPO: ${{ github.repository }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -22,7 +24,7 @@ jobs:
 
       - uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version-file: .node-version
           cache: npm
 
       - uses: actions/setup-python@v7
@@ -32,6 +34,10 @@ jobs:
       - name: Verify tag matches package version
         shell: pwsh
         run: |
+          $packageRepository = node -p "require('./package.json').repository.url"
+          if ($packageRepository -ine "git+https://github.com/$env:GITHUB_REPOSITORY.git") {
+            throw 'Package repository must match the repository publishing this release.'
+          }
           $packageVersion = node -p "require('./package.json').version"
           if ($env:GITHUB_REF_NAME -ne "v$packageVersion") {
             throw "Tag $env:GITHUB_REF_NAME does not match package version $packageVersion."

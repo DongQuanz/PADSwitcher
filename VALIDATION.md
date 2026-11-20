@@ -1,3 +1,30 @@
+# PADSwitcher 1.21.1 — validation
+
+## Startup after sign-in and desynchronisation — 2026-11-20
+
+- Regression suite: 312 tests, 311 passed, 0 failed; the PowerShell 7 check is skipped.
+  New tests cover a rename Windows refuses briefly, a reused process id after a reboot,
+  an unreadable process list at startup, a turn on an unloaded thread, a late exit of a
+  replaced backend, a token another Codex already rotated in a shared session, and a
+  background desktop sync racing a switch. `npm run check` passes.
+- The previously failing Kaggle environment test compared a case-sensitive key; Git
+  Bash names it `SYSTEMROOT`. It now compares the Windows way, case-insensitively.
+- Native loopback suites on `codex-cli 0.167.0-alpha.4.1`: protocol, Say hi, faults,
+  switch and desktop pass; `smoke:ui` passes. The live Windows smoke passed on three
+  reruns after one failure on its first run, which printed no cause.
+- `smoke:continuity` fails at `usage.completed` (27, expected 28). The same failure
+  reproduces on the unmodified 1.21.1 source with the same engine, so it predates this
+  work; it is likely a counter difference in the alpha engine and is left open.
+- Packaged ASAR smoke passes. `smoke:executables` passes both real executables on two
+  reruns; the first run timed out on one debugger request.
+- The portable stub was checked by launching the built executable twice with isolated
+  data: it unpacked into a per-launch folder (`nsXXXX.tmp`), the second launch exited
+  and removed only its own folder, and `PADCodex.exe` of the running copy remained.
+  With 1.21.0/1.21.1 the folder name is fixed per build and shared by every launch.
+- **Not exercised:** an actual Windows 11 reboot with several VS Code windows restored at
+  once, and a real desktop app refreshing its own token while PADSwitcher refreshes.
+  Both follow from code reading and the fixtures above.
+
 # PADSwitcher 1.21.0 — validation
 
 ## Concurrency, reordering, updates and shared layout — 2026-11-07

@@ -2,10 +2,16 @@
 
 # PADSwitcher
 
+Bản phát triển riêng tại **DongQuanz/PADSwitcher**, dựa trên
+[padduwcs/PADSwitcher](https://github.com/padduwcs/PADSwitcher) theo giấy phép MIT.
+Fork này phát triển bản Windows trên nhánh `main`; các bản Linux/macOS bên dưới
+thuộc repo gốc. Cập nhật Windows chỉ lấy từ release của fork này. Khi fork chưa
+có release, chạy từ mã nguồn theo [hướng dẫn phát triển](docs/DEVELOPMENT.md).
+
 Quản lý tài khoản **Codex và Kaggle**, theo dõi quota và tự chuyển tài khoản
 Codex dự phòng khi tài khoản đang dùng hết quota.
 
-[English](README.en.md) · [Hướng dẫn](docs/README.md) · [Báo lỗi](https://github.com/padduwcs/PADSwitcher/issues/new/choose)
+[English](README.en.md) · [Hướng dẫn](docs/README.md) · [Báo lỗi](https://github.com/DongQuanz/PADSwitcher/issues/new/choose)
 
 <a id="downloads"></a>
 ## Tải và cài đặt
@@ -16,7 +22,7 @@ cài Node.js hoặc Go. Windows dùng app **PADSwitcher**; Linux/macOS dùng app
 
 | Hệ điều hành | Bản phát hành | Bộ cài | Hướng dẫn |
 | --- | --- | --- | --- |
-| Windows 10/11 x64 | [Ổn định](https://github.com/padduwcs/PADSwitcher/releases/latest) | `Windows.exe` portable | [Tiếng Việt](https://github.com/padduwcs/PADSwitcher/blob/main/docs/WINDOWS-INSTALL.md) |
+| Windows 10/11 x64 | [Ổn định](https://github.com/DongQuanz/PADSwitcher/releases/latest) | `Windows.exe` portable | [Tiếng Việt](https://github.com/DongQuanz/PADSwitcher/blob/main/docs/WINDOWS-INSTALL.md) |
 | Ubuntu/Debian x64 hoặc ARM64 | [Unix.7 · thử nghiệm](https://github.com/padduwcs/PADSwitcher/releases/tag/unix-v1.19.1-unix.7) | `.deb` | [Tiếng Việt](https://github.com/padduwcs/PADSwitcher/blob/feature/cross-platform/docs/UNIX-INSTALL.md) |
 | Linux khác tương thích | [Unix.7 · thử nghiệm](https://github.com/padduwcs/PADSwitcher/releases/tag/unix-v1.19.1-unix.7) | `.AppImage` | [Yêu cầu Linux](https://github.com/padduwcs/PADSwitcher/blob/feature/cross-platform/docs/UNIX-INSTALL.md) |
 | macOS Intel hoặc Apple Silicon | [Unix.7 · thử nghiệm](https://github.com/padduwcs/PADSwitcher/releases/tag/unix-v1.19.1-unix.7) | `.dmg` hoặc `.zip` | [Tiếng Việt](https://github.com/padduwcs/PADSwitcher/blob/feature/cross-platform/docs/UNIX-INSTALL.md) |
@@ -47,17 +53,18 @@ qua tài khoản khác; tác vụ cloud/remote không thuộc kết nối Codex 
 
 **Kaggle:** chọn **Dịch vụ → Kaggle → Thiết lập**, cài công cụ theo hướng dẫn,
 thêm API token, rồi mở terminal cho tài khoản cần dùng. Mỗi terminal giữ lựa
-chọn tài khoản riêng. Hướng dẫn Kaggle: [Windows](https://github.com/padduwcs/PADSwitcher/blob/main/docs/KAGGLE.md) · [Linux/macOS](https://github.com/padduwcs/PADSwitcher/blob/feature/cross-platform/docs/KAGGLE.md).
+chọn tài khoản riêng. Hướng dẫn Kaggle: [Windows](https://github.com/DongQuanz/PADSwitcher/blob/main/docs/KAGGLE.md) · [Linux/macOS](https://github.com/padduwcs/PADSwitcher/blob/feature/cross-platform/docs/KAGGLE.md).
 
 <p align="center"><img src="docs/images/light.png" width="49%" alt="Giao diện sáng"><img src="docs/images/dark.png" width="49%" alt="Giao diện tối"></p>
 
 ## Clone và phát triển
 
-Repo duy trì hai nhánh. **Chọn đúng nhánh ngay khi clone**:
+Repo gốc duy trì hai nhánh. Fork này dùng `main` cho Windows; hướng dẫn Unix
+bên dưới dẫn đến repo gốc. **Chọn đúng nhánh ngay khi clone**:
 
 | Bạn phát triển bản nào? | Nhánh | Thiết lập và chạy |
 | --- | --- | --- |
-| Windows | `main` | [Hướng dẫn Windows](https://github.com/padduwcs/PADSwitcher/blob/main/docs/DEVELOPMENT.md) |
+| Windows | `main` | [Hướng dẫn Windows](https://github.com/DongQuanz/PADSwitcher/blob/main/docs/DEVELOPMENT.md) |
 | Linux/macOS | `feature/cross-platform` | [Hướng dẫn Unix](https://github.com/padduwcs/PADSwitcher/blob/feature/cross-platform/docs/DEVELOPMENT.md) |
 
 Linux/macOS:
@@ -75,10 +82,17 @@ Một thư mục mã nguồn là đủ; có thể chuyển nhánh bằng Git sau
 Ứng dụng đã cài hoạt động độc lập với thư mục mã nguồn.
 Xem [đóng góp](CONTRIBUTING.md) và [chuyển nhánh trong một thư mục](https://github.com/padduwcs/PADSwitcher/blob/feature/cross-platform/docs/DEVELOPMENT.md#one-folder-and-two-branches).
 
+## Người đóng góp
+
+- **Anh-Duc Phan** ([@padduwcs](https://github.com/padduwcs)) — tác giả PADSwitcher.
+- **DongQuanz** ([@DongQuanz](https://github.com/DongQuanz)) — duy trì bản fork Windows:
+  kênh cập nhật riêng, bản 1.21.1 sửa lỗi khi vừa bật máy (`PADCodex.exe`, hộp lỗi
+  Windows) và các lỗi bất đồng bộ giữa PADSwitcher với Codex.
+
 ## Tài liệu và hỗ trợ
 
 - [Mục lục hướng dẫn](docs/README.md) · [Hỗ trợ](SUPPORT.md) · [Bảo mật](SECURITY.md)
-- [Thay đổi Windows](https://github.com/padduwcs/PADSwitcher/blob/main/CHANGELOG.md) · [Thay đổi Unix](https://github.com/padduwcs/PADSwitcher/blob/feature/cross-platform/CHANGELOG.md)
+- [Thay đổi Windows](https://github.com/DongQuanz/PADSwitcher/blob/main/CHANGELOG.md) · [Thay đổi Unix](https://github.com/padduwcs/PADSwitcher/blob/feature/cross-platform/CHANGELOG.md)
 - [Kiểm chứng Unix và giới hạn](https://github.com/padduwcs/PADSwitcher/blob/feature/cross-platform/docs/UNIX-VALIDATION.md)
 
 Phát hành theo [MIT](LICENSE). Dự án độc lập với OpenAI, Kaggle và JetBrains.

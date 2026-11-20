@@ -5,7 +5,7 @@
 ## Download and open
 
 1. Use **Windows 10/11 x64**, .NET Framework 4.8 and an Internet connection.
-2. Open the [stable Windows release](https://github.com/padduwcs/PADSwitcher/releases/latest),
+2. Open the [stable Windows release](https://github.com/DongQuanz/PADSwitcher/releases/latest),
    expand **Assets**, and download `PADSwitcher-<version>-Windows.exe` plus its
    matching `.sha256` file. **Source code** is for development.
 3. In PowerShell in the download folder, check SHA-256:

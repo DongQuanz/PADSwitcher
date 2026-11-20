@@ -2,6 +2,12 @@
 
 Releases are portable Windows executables published from a version tag. The tag, `package.json`, and `package-lock.json` versions must match.
 
+This fork publishes to `DongQuanz/PADSwitcher`. Enable GitHub Actions in the fork
+before the first release. The release job explicitly sets `GH_REPO` to the current
+repository and refuses to publish if `package.json.repository.url` points elsewhere.
+The updater uses that same package repository; a fork with no stable release has
+no update available and does not contact the upstream release channel.
+
 ## Prepare
 
 1. Update the version with `npm version <version> --no-git-tag-version`.

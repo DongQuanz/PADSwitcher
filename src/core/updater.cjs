@@ -7,7 +7,10 @@ const path=require('node:path');
 const crypto=require('node:crypto');
 const {spawn}=require('node:child_process');
 const {UserError}=require('./errors.cjs');
-const REPOSITORY='padduwcs/PADSwitcher';
+// Package metadata owns the release channel, including in downstream forks.
+const repositoryUrl=new URL(require('../../package.json').repository.url.replace(/^git\+/,''));
+const REPOSITORY=repositoryUrl.pathname.slice(1).replace(/\.git$/,'');
+if(repositoryUrl.protocol!=='https:'||repositoryUrl.host!=='github.com'||repositoryUrl.username||repositoryUrl.password||repositoryUrl.search||repositoryUrl.hash||!/^[-\w.]+\/[-\w.]+$/.test(REPOSITORY))throw Error('Updates require a GitHub HTTPS repository URL.');
 const LATEST='https://api.github.com/repos/'+REPOSITORY+'/releases/latest';
 const RELEASE_PAGE='https://github.com/'+REPOSITORY+'/releases/latest';
 const CHECK_INTERVAL=6*60*60*1000,MAX_SIZE=512*1024*1024,MAX_NOTES=6000;
@@ -53,14 +56,16 @@ class Updater{
   set(fields){Object.assign(this,fields);this.onChange();}
   async json(url,accept){
     const response=await this.request(url,{headers:{accept,'user-agent':'PADSwitcher/'+this.current},redirect:'follow',signal:AbortSignal.timeout(20000)});
-    if(!response.ok||(url!==LATEST&&response.url&&!finalHost(response.url)))throw new UserError('GitHub chưa trả lời yêu cầu cập nhật. Hãy thử lại sau.','UPDATE_CHECK');
+    // GitHub returns 404 until a public repository has its first stable release.
+    if((!response.ok&&!(url===LATEST&&response.status===404))||(url!==LATEST&&response.url&&!finalHost(response.url)))throw new UserError('GitHub chưa trả lời yêu cầu cập nhật. Hãy thử lại sau.','UPDATE_CHECK');
     return response;
   }
   async check(){
     if(['checking','downloading'].includes(this.status))return this.view();
     const previous=this.status;this.set({status:'checking',error:null});
     try{
-      const value=await (await this.json(LATEST,'application/vnd.github+json')).json(),version=VERSION.exec(value?.tag_name||'')?.[0].replace(/^v/,'');
+      const response=await this.json(LATEST,'application/vnd.github+json');
+      const value=response.status===404?null:await response.json(),version=VERSION.exec(value?.tag_name||'')?.[0].replace(/^v/,'');
       this.checkedAt=new Date().toISOString();
       if(!version||value.draft||value.prerelease||!newer(version,this.current)){this.set({status:'current',release:null});return this.view();}
       const name='PADSwitcher-'+version+'-Windows.exe',find=file=>(value.assets||[]).find(a=>a.name===file);

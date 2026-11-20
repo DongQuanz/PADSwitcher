@@ -27,7 +27,8 @@ class ProfileService extends EventEmitter {
     this.journalFile = path.join(this.root, 'desktop-journal.json');
     this.platform = require('./platform.cjs').createPlatform(this.root,adapters);
     this.rpcFactory = adapters.rpcFactory || ((exe,home,opts) => new CodexRpc(exe,home,opts));
-    this.running = new Map(); this.lock = new KeyedLock(); this.refreshing = new Set(); this.login = null;
+    this.running = new Map(); this.lock = new KeyedLock(); this.refreshing = new Set(); this.login = null; this.storeRevision = 0;
+    this.issuedTokens = new Map(); // Last access token handed to a gateway, per profile.
     // Model calls read this in-memory copy instead of decrypting the vault each time.
     this.credentials = new Map(); this.eventLog = new EventLog(path.join(this.root,'events.jsonl'));
     this.sayHi = new SayHiService(this, adapters.sayHiOptions);
@@ -97,8 +98,8 @@ class ProfileService extends EventEmitter {
   // Pass `account` whenever only one profile is touched, so others stay available.
   async exclusive(operation, { account = null } = {}) {
     try {
-      return await this.lock.run(account, () => { if (account === null) this.changed(); return operation(); });
-    } finally { if (account === null) this.changed(); }
+      return await this.lock.run(account, () => { if (account === null) { this.storeRevision++; this.changed(); } return operation(); });
+    } finally { if (account === null) { this.storeRevision++; this.changed(); } }
   }
   get(id) { const p = this.state.profiles.find(p => p.id === id); if (!p) throw new UserError('Không tìm thấy hồ sơ.', 'PROFILE_MISSING'); return p; }
   home(id) { return profilePath(this.profilesRoot,id); }
@@ -144,8 +145,13 @@ class ProfileService extends EventEmitter {
     try { return parseAuth(bytes); } finally { bytes.fill(0); }
   }
   async syncDesktop() {
+    // Background refreshes call this without the store lock. A switch or restore that began
+    // or finished while auth.json was being read owns activeDesktopId; never overwrite it
+    // with what may be the pre-switch identity.
+    const revision = this.storeRevision;
     let identity = null;
     try { identity = await this.desktopIdentity(); } catch (e) { if (!['ENOENT','AUTH_INVALID','AUTH_UNSUPPORTED'].includes(e.code)) throw e; }
+    if (revision !== this.storeRevision) return;
     const id = this.state.profiles.find(p => p.identity === identity?.identity)?.id || null;
     if (id !== this.state.activeDesktopId) { this.state.activeDesktopId = id; await this.save(); }
   }
@@ -178,7 +184,12 @@ class ProfileService extends EventEmitter {
         if(parseAuth(bytes).identity!==p.identity) throw new UserError('Phiên không khớp hồ sơ.', 'IDENTITY_MISMATCH');
         let data=JSON.parse(bytes.toString('utf8'));
         const expires=tokenExpiry(data);
-        if(force || (expires && expires-Date.now()<CREDENTIAL_MARGIN)) {
+        // The desktop home and an open CLI's home are shared with another Codex process that
+        // refreshes on its own. If it already rotated the session, use that rotation: refreshing
+        // again spends the refresh token a second time and signs the other client out.
+        const issued=this.issuedTokens.get(id),shared=desktop||this.running.has(id);
+        const rotatedElsewhere=force&&shared&&issued!==undefined&&data.tokens.access_token!==issued&&expires-Date.now()>=CREDENTIAL_MARGIN;
+        if((force&&!rotatedElsewhere) || (expires && expires-Date.now()<CREDENTIAL_MARGIN)) {
           bytes.fill(0); bytes=null;
           const home=desktop ? this.state.settings.desktopHome : await this.runtime(id);
           const rpc=this.rpcFactory(await this.executable(),home,{fileStore:!desktop});
@@ -191,6 +202,7 @@ class ProfileService extends EventEmitter {
         if(!accountId)throw new UserError('Phiên thiếu mã tài khoản ChatGPT.', 'AUTH_INVALID');
         const tokenPlan=parseAuth(bytes).plan,accessToken=data.tokens.access_token,valid=tokenExpiry(data);
         if(valid)this.credentials.set(id,{accessToken,accountId,tokenPlan,expires:valid});
+        this.issuedTokens.set(id,accessToken);
         return {accessToken,chatgptAccountId:accountId,chatgptPlanType:this.bundlePlan(p,tokenPlan)};
       } finally {bytes?.fill(0);}
     },{account:id});
@@ -216,13 +228,22 @@ class ProfileService extends EventEmitter {
       try { await this.storeAuth(id,bytes); await fs.unlink(file); } finally { bytes.fill(0); }
     }
   }
+  // A recorded PID may belong to a different process after a reboot. The lease is written
+  // right after its shell starts, so a process that started later cannot be that shell.
+  leaseAlive(list, lease) {
+    const created = Date.parse(lease.createdAt);
+    return list.some(x => x.ProcessId === lease.pid && /^powershell\.exe$/i.test(x.Name) && !(Number.isFinite(x.Started) && Number.isFinite(created) && x.Started > created + 5000));
+  }
   async recoverRuntimes() {
-    const list = await this.platform.processes();
+    // WMI may still be starting right after sign-in. When the list cannot be read, keep every
+    // recorded session as running rather than sealing a live CLI's credentials; the next
+    // refresh settles them through checkRecovered().
+    let list = null; try { list = await this.platform.processes(); } catch { list = null; }
     for (const p of this.state.profiles) {
       const marker = path.join(this.home(p.id),'runtime.json');
       if (await exists(marker)) {
         let lease; try { lease = JSON.parse((await readLimited(marker)).toString('utf8')); } catch { throw new UserError('Trạng thái phiên CLI bị lỗi. Không xóa dữ liệu đang dùng.', 'LEASE_INVALID'); }
-        if (list.some(x => x.ProcessId === lease.pid && /^powershell\.exe$/i.test(x.Name))) { this.running.set(p.id,{ pid: lease.pid, recovered: true, desktop: lease.desktop === true }); continue; }
+        if (list === null || this.leaseAlive(list,lease)) { this.running.set(p.id,{ pid: lease.pid, recovered: true, desktop: lease.desktop === true, createdAt: lease.createdAt }); continue; }
       }
       await this.seal(p.id);
       if (await exists(marker)) await fs.unlink(marker);
@@ -236,8 +257,8 @@ class ProfileService extends EventEmitter {
   async checkRecovered() {
     const recovered = [...this.running.entries()].filter(([,v]) => v.recovered);
     if (!recovered.length) return;
-    const list = await this.platform.processes();
-    for (const [id, lease] of recovered) if (!list.some(x => x.ProcessId === lease.pid && /^powershell\.exe$/i.test(x.Name))) {
+    let list; try { list = await this.platform.processes(); } catch { return; } // Unknown: keep them as running.
+    for (const [id, lease] of recovered) if (!this.leaseAlive(list,lease)) {
       await this.seal(id); await fs.unlink(path.join(this.home(id),'runtime.json')).catch(() => {}); this.running.delete(id);
     }
   }
@@ -573,7 +594,7 @@ class ProfileService extends EventEmitter {
       const trash = path.join(this.root,'trash'); await fs.mkdir(trash,{recursive:true}); await assertDirectory(trash);
       const destination = path.join(trash,id); if (await exists(destination)) throw new UserError('Có hồ sơ cùng mã trong thùng rác.', 'TRASH_CONFLICT');
       await fs.rename(home,destination);
-      this.state.profiles = this.state.profiles.filter(p => p.id !== id); this.credentials.delete(id);
+      this.state.profiles = this.state.profiles.filter(p => p.id !== id); this.credentials.delete(id); this.issuedTokens.delete(id);
       const oldAuto=this.state.autoSwitch,oldCooldown=this.state.quotaCooldowns,oldRoutes=this.state.clientRoutes;
       const order=oldAuto.order.filter(x=>x!==id);this.state.autoSwitch={enabled:oldAuto.enabled&&order.length>=2,order};
       this.state.quotaCooldowns={...oldCooldown};delete this.state.quotaCooldowns[id];this.gateway?.recovery.cancel();

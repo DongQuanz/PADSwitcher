@@ -1,6 +1,7 @@
 'use strict';
 const { app, BrowserWindow, ipcMain, dialog, shell, Tray, Menu, clipboard } = require('electron');
 const path = require('node:path');
+const fs = require('node:fs');
 const { ProfileService } = require('./core/service.cjs');
 const { KaggleService, notebookRef } = require('./core/kaggle.cjs');
 const { createQuotaRefresher } = require('./core/quota-refresh.cjs');
@@ -14,6 +15,25 @@ const { UserError, publicError } = require('./core/errors.cjs');
 let window, service, kaggle, gateway, integration, jetbrains, desktop, updater, tray, timer, kaggleTimer, integrationTimer, updateTimer, integrationFlight, quitting = false, shutdown = false;
 let uiLocale='vi';
 const text=(vi,en)=>uiLocale==='en'?en:vi;
+const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+// Right after sign-in Windows is busy; these failures usually succeed a few seconds later.
+const TRANSIENT=new Set(['TIMEOUT','WINDOWS_OPERATION','PROCESS_CHECK_FAILED','OUTPUT_LIMIT','VAULT_ERROR','GATEWAY_START','GATEWAY_BUSY','GATEWAY_CONNECT','GATEWAY_TIMEOUT','GATEWAY_CLOSED','EPERM','EBUSY','EACCES']);
+const transient=error=>TRANSIENT.has(error?.code);
+// A failure at boot has no console. Keep a short local record so it can be diagnosed afterwards.
+function logFailure(stage,error){
+  try{
+    const directory=path.join(app.getPath('appData'),'PADSwitcher'),file=path.join(directory,'startup-error.log');
+    fs.mkdirSync(directory,{recursive:true});
+    try{if(fs.statSync(file).size>512*1024)fs.renameSync(file,file+'.1');}catch{}
+    const detail=error instanceof Error?String(error.stack||error.message).split('\n').slice(0,8).join('\n'):String(error);
+    fs.appendFileSync(file,new Date().toISOString()+' ['+stage+'] code='+(error?.code??'-')+' v'+app.getVersion()+'\n'+detail+'\n\n');
+    return file;
+  }catch{return null;}
+}
+// Without these Electron shows its own "JavaScript error in the main process" box.
+process.on('uncaughtException',error=>{logFailure('uncaught',error);});
+process.on('unhandledRejection',reason=>{logFailure('unhandled',reason);});
+const checkIntegration=()=>integrationFlight||(integrationFlight=(async()=>{const [next,jb,dt]=await Promise.all([integration.status(),jetbrains.status(),desktop.status()]);if(JSON.stringify(service.vscode)!==JSON.stringify(next)||JSON.stringify(service.jetbrains)!==JSON.stringify(jb)||JSON.stringify(service.desktopStatus)!==JSON.stringify(dt)){service.vscode=next;service.jetbrains=jb;service.desktopStatus=dt;service.changed();}})().finally(()=>{integrationFlight=null;}));
 function updateTray() {
   if(!tray)return;
   tray.setToolTip(text('PADSwitcher — quản lý phiên Codex','PADSwitcher — Codex account manager'));
@@ -25,7 +45,11 @@ const trustedRenderer = require('./core/renderer-origin.cjs').rendererOrigin(ren
 if (!app.requestSingleInstanceLock()) app.quit();
 else {
   app.on('second-instance',(_event,argv) => { if (window && !argv.includes('--background')) { if (window.isMinimized()) window.restore(); window.show(); window.focus(); } });
-  app.whenReady().then(start).catch(() => { dialog.showErrorBox('PADSwitcher','Không thể khởi động an toàn. Giữ nguyên thư mục dữ liệu và kiểm tra quyền truy cập Windows.'); app.quit(); });
+  app.whenReady().then(start).catch(error => {
+    const file=logFailure('start',error);
+    dialog.showErrorBox('PADSwitcher',(error instanceof UserError?error.message:'Không thể khởi động an toàn. Giữ nguyên thư mục dữ liệu và kiểm tra quyền truy cập Windows.')+'\n\nMã lỗi: '+(error?.code||'UNKNOWN')+(file?'\nNhật ký: '+file:''));
+    app.quit();
+  });
 }
 async function openAuth(url) {
   let parsed; try { parsed = new URL(url); } catch { throw new UserError('Đường dẫn đăng nhập không hợp lệ.', 'LOGIN_URL'); }
@@ -44,6 +68,19 @@ function quitForUpdate() {
   Promise.race([finished,new Promise(resolve=>setTimeout(resolve,15000))]).finally(()=>{quitting=true;tray?.destroy();app.quit();});
 }
 async function start() {
+  // Everything before the window only reads local state, so a transient Windows failure
+  // (slow PowerShell/WMI, a file held by antivirus) can safely be retried from scratch.
+  for (let attempt = 1; ; attempt++) {
+    try { await prepare(); break; }
+    catch (error) {
+      logFailure('prepare#'+attempt,error);
+      if (attempt >= 3 || !transient(error)) throw error;
+      await pause(attempt * 3000);
+    }
+  }
+  await openWindow();
+}
+async function prepare() {
   service = new ProfileService(path.join(app.getPath('appData'),'PADSwitcher','data'));
   await service.init();
   kaggle = new KaggleService(service.root);
@@ -51,9 +88,12 @@ async function start() {
   service.kaggle = kaggle;
   kaggle.on('change',()=>service.changed());
   updater=new Updater({current:app.getVersion(),executable:portableExecutable(),root:service.root,platform:service.platform,onChange:()=>service.changed()});service.updater=updater;
-  gateway=new GatewayHub(service);integration=new Integration(service);jetbrains=new JetBrainsIntegration(service);desktop=new DesktopIntegration(service,gateway);await desktop.init();
-  const checkIntegration=()=>integrationFlight||(integrationFlight=(async()=>{const [next,jb,dt]=await Promise.all([integration.status(),jetbrains.status(),desktop.status()]);if(JSON.stringify(service.vscode)!==JSON.stringify(next)||JSON.stringify(service.jetbrains)!==JSON.stringify(jb)||JSON.stringify(service.desktopStatus)!==JSON.stringify(dt)){service.vscode=next;service.jetbrains=jb;service.desktopStatus=dt;service.changed();}})().finally(()=>{integrationFlight=null;}));
-  await checkIntegration();
+  gateway=new GatewayHub(service);integration=new Integration(service);jetbrains=new JetBrainsIntegration(service);desktop=new DesktopIntegration(service,gateway);
+  // Probing installed apps starts PowerShell/WMI; do it after the window is up.
+  await desktop.init({probe:false});
+}
+async function openWindow() {
+  checkIntegration().catch(()=>{});
   window = new BrowserWindow({ width: 1260, height: 840, minWidth: 1000, minHeight: 680, title: 'PADSwitcher', icon:path.join(__dirname,'assets','padswitcher.ico'), backgroundColor:'#F6F8FB', autoHideMenuBar:true, show:false, webPreferences: { preload:path.join(__dirname,'preload.cjs'), nodeIntegration:false, contextIsolation:true, sandbox:true, webSecurity:true, devTools:!app.isPackaged } });
   window.webContents.setWindowOpenHandler(() => ({ action:'deny' }));
   window.webContents.on('will-navigate',(event,url) => { if (!trustedRenderer.accept(url)) event.preventDefault(); });
@@ -96,7 +136,7 @@ async function start() {
         }
         case 'state': result = service.view(); break;
         case 'import': result = await service.importCurrent(args.label); break;
-        case 'add': result = await service.addAccount(args.label,openAuth,args.device === true,args.id || null,device => window.webContents.send('pad:device',device)); break;
+        case 'add': result = await service.addAccount(args.label,openAuth,args.device === true,args.id || null,device => { if (!window.isDestroyed()) window.webContents.send('pad:device',device); }); break;
         case 'cancelLogin': service.cancelLogin(); break;
         case 'recoverLogin': result = await service.recoverLogin(); break;
         case 'refresh': result = await service.refresh(args.id); break;
@@ -183,8 +223,18 @@ async function start() {
   tray?.on('double-click',showWindow);
   updateTray();
   if(service.state.gatewayEnabled&&service.state.profiles.some(p=>p.id===service.state.gatewayProfileId)){
-    await gateway.start(service.state.gatewayProfileId).catch(error=>{if(!window.isDestroyed())window.webContents.send('pad:refresh-error',publicError(error));});
-    await updateLauncher();
+    // Codex is often slower to listen at boot. Retry in the background with growing waits
+    // instead of leaving the connection in an error state until the user notices.
+    (async()=>{
+      for(let attempt=1;!shutdown&&!quitting;attempt++){
+        try{await gateway.start(service.state.gatewayProfileId);await updateLauncher();return;}
+        catch(error){
+          logFailure('gateway#'+attempt,error);
+          if(attempt>=4||!transient(error)||!service.state.gatewayEnabled){if(!window.isDestroyed())window.webContents.send('pad:refresh-error',publicError(error));return;}
+          await pause(attempt*5000);
+        }
+      }
+    })();
   }
   const refreshQuota = createQuotaRefresher(service);
   const refresh = reason => { refreshQuota(reason).catch(error => {
@@ -192,8 +242,12 @@ async function start() {
   }); };
   refresh('startup');
   window.on('focus',() => refresh('focus'));
-  window.on('focus',()=>checkIntegration());
-  integrationTimer=setInterval(()=>checkIntegration(),3000);
+  // Status reads editor settings and, through desktop.status, WMI. Poll quickly only while
+  // someone can see the result; hidden in the tray, a slow pass is enough. Focus refreshes at once.
+  let integrationAt=0;
+  const pollIntegration=()=>{integrationAt=Date.now();checkIntegration().catch(()=>{});};
+  window.on('focus',pollIntegration);
+  integrationTimer=setInterval(()=>{const visible=!window.isDestroyed()&&window.isVisible()&&!window.isMinimized();if(visible||Date.now()-integrationAt>=60000)pollIntegration();},3000);
   timer = setInterval(() => refresh('periodic'), 60 * 1000);
   const refreshKaggle=()=>{if(kaggle.state.settings.autoRefresh)kaggle.refreshAll(true).catch(error=>{if(!window?.isDestroyed())window.webContents.send('pad:refresh-error',publicError(error));});};
   refreshKaggle(); kaggleTimer=setInterval(refreshKaggle,120000);
@@ -217,7 +271,7 @@ async function start() {
     if(service.busy||service.sayHi.flight||gateway.status!=='stopped'||kaggle.flights.size||kaggle.toolFlight||kaggle.saveFlight){
       event.preventDefault();if(shutdown)return;shutdown=true;
       clearInterval(kaggleTimer);
-      Promise.all([service.close(),gateway.stop(),kaggle.shutdown()]).then(()=>{quitting=true;clearInterval(timer);tray?.destroy();app.quit();},error=>{shutdown=false;window.show();dialog.showMessageBox(window,{type:'info',message:publicError(error).message});});
+      Promise.all([service.close(),gateway.stop(),kaggle.shutdown()]).then(()=>{quitting=true;clearInterval(timer);tray?.destroy();app.quit();},error=>{shutdown=false;service.closing=false;window.show();dialog.showMessageBox(window,{type:'info',message:publicError(error).message});});
     }else{quitting=true;clearInterval(timer);tray?.destroy();}
   });
 }

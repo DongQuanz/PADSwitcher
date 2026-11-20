@@ -95,7 +95,7 @@ test('a managed Kaggle environment is preferred without probing unrelated interp
 });
 test('subprocess environment excludes inherited Kaggle credentials and Python hooks',()=>{
   const old={};for(const key of ['KAGGLE_API_TOKEN','KAGGLE_KEY','PADSWITCHER_KAGGLE_VAULT','PYTHONPATH']){old[key]=process.env[key];process.env[key]='fixture-secret';}
-  try{const env=safeEnvironment();for(const key of Object.keys(old))assert.equal(env[key],undefined);assert.equal(env.SystemRoot,process.env.SystemRoot);}
+  try{const env=safeEnvironment();for(const key of Object.keys(old))assert.equal(env[key],undefined);assert.equal(Object.entries(env).find(([key])=>key.toLowerCase()==='systemroot')?.[1],process.env.SystemRoot);} // Windows names are case-insensitive.
   finally{for(const [key,value] of Object.entries(old)){if(value===undefined)delete process.env[key];else process.env[key]=value;}}
   assert(TERMINAL_SCRIPT.includes('. $env:PADSWITCHER_KAGGLE_HELPER'));assert(TERMINAL_SCRIPT.includes('padkaggle use'));assert(!TERMINAL_SCRIPT.includes(tokenA));
 });
@@ -115,15 +115,18 @@ test('corrupt Kaggle metadata disables its mutations without blocking Codex or o
   await fs.writeFile(k.file,JSON.stringify(malformed));await assert.rejects(new KaggleService(f.data,f.adapter).init(),{code:'KAGGLE_STORE'});
 });
 
-test('notebook pagination deduplicates requests and refs, isolates accounts, and leaves saved snapshots bounded',async t=>{
+test('notebook pagination deduplicates requests and refs, isolates accounts, and leaves saved snapshots bounded',{timeout:10000},async t=>{
   const f=await setup(t),a=await f.k.add({token:tokenA,workspace:f.directory}),b=await f.k.add({token:tokenB,workspace:f.directory});
   f.setResponder(async payload=>({ok:true,username:payload.username,quota:[{resource:'GPU',remaining:20,total:30}],notebooks:[{ref:payload.username+'/job',title:'Fresh first page',status:'running'}],hasMore:true}));
   await f.k.refresh(a);await f.k.refresh(b);const before=f.k.view().accounts[0];
-  let release;const gate=new Promise(resolve=>release=resolve),reads=[];
-  f.setResponder(async payload=>{reads.push(payload);await gate;return {ok:true,username:payload.username,page:payload.page,hasMore:false,notebooks:[{ref:payload.username+'/job',title:'Older duplicate',status:'complete'},{ref:payload.username+'/older',title:tokenA,status:'complete',machineShape:tokenB}]};});
+  const gate=Promise.withResolvers(),started=Promise.withResolvers(),reads=[];
+  f.setResponder(async payload=>{reads.push(payload);if(reads.length===2)started.resolve();await gate.promise;return {ok:true,username:payload.username,page:payload.page,hasMore:false,notebooks:[{ref:payload.username+'/job',title:'Older duplicate',status:'complete'},{ref:payload.username+'/older',title:tokenA,status:'complete',machineShape:tokenB}]};});
   const first=f.k.notebooksMore(a),duplicate=f.k.notebooksMore(a),other=f.k.notebooksMore(b);
-  await new Promise(resolve=>setTimeout(resolve,15));assert.equal(reads.length,2);assert(f.k.view().accounts.every(p=>p.notebookList.loading));
-  release();await Promise.all([first,duplicate,other]);
+  t.after(async()=>{gate.resolve();await Promise.all([first,duplicate,other]);});
+  // Token reads finish asynchronously; observe both requests rather than guessing
+  // how quickly the filesystem/decryption will complete on a busy CI machine.
+  await started.promise;assert.equal(reads.length,2);assert(f.k.view().accounts.every(p=>p.notebookList.loading));
+  gate.resolve();await Promise.all([first,duplicate,other]);
   assert.deepEqual(reads.map(p=>[p.token,p.page]).sort(),[[tokenA,2],[tokenB,2]]);assert(reads.every(p=>p.action==='notebooks'&&!p.watch));
   const p=f.k.view().accounts[0];assert.equal(p.notebooks.length,2);assert.equal(p.notebooks[0].title,'Fresh first page');assert(p.notebooks[1].readAt);assert.equal(p.notebookList.hasMore,false);assert.equal(p.notebookList.loading,false);
   assert.equal(p.quotaAt,before.quotaAt);assert.equal(p.notebooksAt,before.notebooksAt);assert(!JSON.stringify(p).includes(tokenA));

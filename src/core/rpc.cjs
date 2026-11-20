@@ -2,6 +2,7 @@
 const { spawn } = require('node:child_process');
 const readline = require('node:readline');
 const path = require('node:path');
+const { existsSync } = require('node:fs');
 const { UserError } = require('./errors.cjs');
 class CodexRpc {
   constructor(executable, home, options = {}) {
@@ -19,7 +20,9 @@ class CodexRpc {
     this.child.stderr.resume(); this.child.stdin.on('error', () => {});
     this.lines = readline.createInterface({ input: this.child.stdout });
     this.lines.on('line', line => this.receive(line));
-    this.child.on('error', () => this.fail(new UserError('Không khởi chạy được Codex. Kiểm tra codex.exe trong Cài đặt.', 'CODEX_START_FAILED')));
+    this.child.on('error', () => this.fail(supervised&&!existsSync(host)
+      ? new UserError('Thiếu cầu nối PADCodex.exe trong bộ ứng dụng. Thoát PADSwitcher rồi mở lại bản portable để giải nén lại; nếu vẫn lỗi, tải lại bộ ứng dụng.', 'CODEX_HELPER_MISSING')
+      : new UserError('Không khởi chạy được Codex. Kiểm tra codex.exe trong Cài đặt.', 'CODEX_START_FAILED')));
     this.child.on('close', () => this.fail(new UserError('Kết nối Codex đã đóng. Hãy thử lại.', 'RPC_CLOSED')));
   }
   receive(line) {

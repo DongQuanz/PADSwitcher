@@ -21,9 +21,21 @@ function run(file, args, { input, env, timeout = 20000 } = {}) {
 function ps(script, options) {
   return run(powershell, ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], options);
 }
+// Right after sign-in Windows is busy (Defender scan, WMI/CIM still starting), so a
+// PowerShell call that normally takes a second can time out. Retry before giving up.
+const TRANSIENT = new Set(['TIMEOUT', 'WINDOWS_OPERATION', 'PROCESS_CHECK_FAILED']);
+async function withRetry(operation, { attempts = 3, delay = 1500 } = {}) {
+  for (let attempt = 1; ; attempt++) {
+    try { return await operation(); }
+    catch (error) {
+      if (attempt >= attempts || !TRANSIENT.has(error?.code)) throw error;
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+}
 async function protectDirectory(root) {
   if (process.platform !== 'win32') throw new UserError('Bản này yêu cầu Windows 10/11.', 'WINDOWS_REQUIRED');
-  await ps("$ErrorActionPreference='Stop'; $acl=New-Object Security.AccessControl.DirectorySecurity; $acl.SetAccessRuleProtection($true,$false); $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User; foreach($identity in @($sid,(New-Object Security.Principal.SecurityIdentifier('S-1-5-18')))){ $rule=New-Object Security.AccessControl.FileSystemAccessRule($identity,'FullControl','ContainerInherit,ObjectInherit','None','Allow'); $acl.AddAccessRule($rule) }; [IO.Directory]::SetAccessControl($env:PADSWITCHER_PROTECT_ROOT,$acl)",{env:{...process.env,PADSWITCHER_PROTECT_ROOT:root}});
+  await withRetry(() => ps("$ErrorActionPreference='Stop'; $acl=New-Object Security.AccessControl.DirectorySecurity; $acl.SetAccessRuleProtection($true,$false); $sid=[Security.Principal.WindowsIdentity]::GetCurrent().User; foreach($identity in @($sid,(New-Object Security.Principal.SecurityIdentifier('S-1-5-18')))){ $rule=New-Object Security.AccessControl.FileSystemAccessRule($identity,'FullControl','ContainerInherit,ObjectInherit','None','Allow'); $acl.AddAccessRule($rule) }; [IO.Directory]::SetAccessControl($env:PADSWITCHER_PROTECT_ROOT,$acl)",{env:{...process.env,PADSWITCHER_PROTECT_ROOT:root},timeout:45000}));
 }
 async function dpapi(bytes, decrypt = false) {
   const method = decrypt ? 'Unprotect' : 'Protect';
@@ -32,7 +44,7 @@ async function dpapi(bytes, decrypt = false) {
   return Buffer.from(output, 'base64');
 }
 async function processes() {
-  const output = await ps("$ErrorActionPreference='Stop'; $p=@(Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,ExecutablePath); ConvertTo-Json -InputObject $p -Compress", { timeout: 15000 });
+  const output = await withRetry(() => ps("$ErrorActionPreference='Stop'; $p=@(Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,ExecutablePath,@{N='Started';E={if($_.CreationDate){([DateTimeOffset]$_.CreationDate).ToUnixTimeMilliseconds()}else{$null}}}); ConvertTo-Json -InputObject $p -Compress", { timeout: 30000 }));
   try { return JSON.parse(output); } catch { throw new UserError('Không kiểm tra được tiến trình đang chạy. Chưa thể chuyển tài khoản.', 'PROCESS_CHECK_FAILED'); }
 }
 function blockers(list, ownPids = []) {

@@ -325,16 +325,16 @@ test('the helper launcher exists only while the connection is enabled',async t=>
   f.service.state.gatewayEnabled=true;await syncManagerLauncher(f.service,null);assert.equal(await exists(file),false);
 });
 
-const {Updater,newer,notes,assetUrl}=require('../src/core/updater.cjs');
+const {Updater,newer,notes,assetUrl,RELEASE_PAGE}=require('../src/core/updater.cjs');
 function release(version,bytes,extra={}){
-  const name='PADSwitcher-'+version+'-Windows.exe',base='https://github.com/padduwcs/PADSwitcher/releases/download/v'+version+'/';
+  const name='PADSwitcher-'+version+'-Windows.exe',base='https://github.com/DongQuanz/PADSwitcher/releases/download/v'+version+'/';
   return {tag_name:'v'+version,draft:false,prerelease:false,published_at:'2026-11-07T00:00:00Z',body:'Tiếng **Việt** [link](https://x.test)\n\n---\n\nEnglish',assets:[{name,size:bytes.length,browser_download_url:base+name},{name:name+'.sha256',size:64,browser_download_url:base+name+'.sha256'}],...extra};
 }
 async function updateFixture(t,value,bytes,{checksum}={}){
   const f=await fixture(t),folder=path.join(f.directory,'app');await fs.mkdir(folder);const executable=path.join(folder,'PADSwitcher-1.0.0-Windows.exe');await fs.writeFile(executable,'old');
   const sum=checksum??require('node:crypto').createHash('sha256').update(bytes).digest('hex'),requests=[];
   const request=async(url,options)=>{requests.push({url,options});
-    if(url.includes('api.github.com'))return new Response(JSON.stringify(value));
+    if(url==='https://api.github.com/repos/DongQuanz/PADSwitcher/releases/latest')return new Response(JSON.stringify(value));
     if(url.endsWith('.sha256'))return new Response(sum+'  file.exe\n');
     return new Response(bytes);};
   const scripts=[],spawned=[];
@@ -344,8 +344,26 @@ async function updateFixture(t,value,bytes,{checksum}={}){
 test('versions compare numerically and only exact release tags count',()=>{
   assert(newer('1.10.0','1.9.9'));assert(newer('v2.0.0','1.99.99'));assert(!newer('1.0.0','1.0.0'));assert(!newer('1.0.0','1.0.1'));assert(!newer('1.0.0-unix.1','0.1.0'));assert(!newer('unix-v9.0.0','1.0.0'));
   assert.deepEqual(notes('Việt **đậm**\n---\nEnglish [a](http://b)'),{vi:'Việt đậm',en:'English a'});
-  assert(assetUrl('https://github.com/padduwcs/PADSwitcher/releases/download/v1/a.exe'));
-  for(const url of ['http://github.com/padduwcs/PADSwitcher/releases/download/v1/a.exe','https://github.com/other/PADSwitcher/releases/download/v1/a.exe','https://evil.test/padduwcs/PADSwitcher/releases/download/v1/a.exe','bad'])assert.equal(assetUrl(url),null);
+  assert.equal(RELEASE_PAGE,'https://github.com/DongQuanz/PADSwitcher/releases/latest');
+  assert(assetUrl('https://github.com/DongQuanz/PADSwitcher/releases/download/v1/a.exe'));
+  for(const url of ['https://github.com/padduwcs/PADSwitcher/releases/download/v1/a.exe','http://github.com/DongQuanz/PADSwitcher/releases/download/v1/a.exe','https://github.com/other/PADSwitcher/releases/download/v1/a.exe','https://evil.test/DongQuanz/PADSwitcher/releases/download/v1/a.exe','bad'])assert.equal(assetUrl(url),null);
+});
+
+test('a fork with no stable release has no update and never falls back to upstream',async t=>{
+  const bytes=Buffer.from('x'),f=await updateFixture(t,release('1.1.0',bytes),bytes),{updater}=f;
+  await updater.check();assert.equal(updater.view().status,'available');
+  const requests=[];updater.request=async url=>{requests.push(url);return new Response(null,{status:404});};
+  const view=await updater.check();assert.equal(view.status,'current');assert.equal(view.error,null);assert.equal(view.version,null);assert(view.checkedAt);
+  assert.deepEqual(requests,['https://api.github.com/repos/DongQuanz/PADSwitcher/releases/latest']);
+  await assert.rejects(updater.download(),{code:'UPDATE_NONE'});
+  await assert.rejects(updater.install(),{code:'UPDATE_NONE'});
+});
+
+test('GitHub access and server errors are still reported as update check failures',async()=>{
+  for(const status of [403,429,500]){
+    const updater=new Updater({current:'1.0.0',platform:{},fetch:async()=>new Response(null,{status})});
+    const view=await updater.check();assert.equal(view.status,'idle');assert(view.error);assert.equal(view.checkedAt,null);
+  }
 });
 test('an update downloads beside the app, passes its checksum and repoints shortcuts before relaunching',async t=>{
   const bytes=Buffer.from('new executable'),f=await updateFixture(t,release('1.1.0',bytes),bytes),{updater}=f;
@@ -404,4 +422,55 @@ test('a failed update check keeps an offer already found, and a redirected check
   const view=await updater.check();assert.equal(view.status,'available');assert.equal(view.version,'1.1.0');assert(view.error);
   updater.request=async(url,options)=>{if(url.endsWith('.sha256')){const r=new Response('a'.repeat(64));Object.defineProperty(r,'url',{value:'https://evil.test/sum'});return r;}return request(url,options);};
   await assert.rejects(updater.download(),{code:'UPDATE_CHECK'});assert.equal(updater.view().status,'available');
+});
+test('a reused process id after a reboot is not mistaken for a running CLI',async t => {
+  const f = await fixture(t); const id = (await f.service.capture(auth('b'),'B')).id;
+  await f.service.runtime(id);
+  await fs.writeFile(path.join(f.service.home(id),'runtime.json'),JSON.stringify({pid:4321,createdAt:new Date(Date.now()-3600000).toISOString()}));
+  f.adapter.processes = async () => [{ProcessId:4321,Name:'powershell.exe',Started:Date.now()-60000}];
+  const next = await f.create();
+  assert.equal(next.running.has(id),false); assert.equal(await exists(path.join(next.home(id),'auth.json')),false); assert.equal(await exists(path.join(next.home(id),'runtime.json')),false);
+});
+test('the original shell is still recognised when its start time precedes the lease',async t => {
+  const f = await fixture(t); const id = (await f.service.capture(auth('b'),'B')).id;
+  await f.service.runtime(id); const created = Date.now()-3600000;
+  await fs.writeFile(path.join(f.service.home(id),'runtime.json'),JSON.stringify({pid:4321,createdAt:new Date(created).toISOString()}));
+  f.adapter.processes = async () => [{ProcessId:4321,Name:'powershell.exe',Started:created-1500}];
+  const next = await f.create(); assert.ok(next.running.has(id)); assert.ok(await exists(path.join(next.home(id),'auth.json')));
+});
+test('startup does not seal a possibly running CLI when the process list is unavailable',async t => {
+  const f = await fixture(t); const id = (await f.service.capture(auth('b'),'B')).id;
+  await f.service.runtime(id); await fs.writeFile(path.join(f.service.home(id),'runtime.json'),JSON.stringify({pid:4321,createdAt:new Date().toISOString()}));
+  f.adapter.processes = async () => { throw Object.assign(new Error('WMI starting'),{code:'TIMEOUT'}); };
+  const next = await f.create();
+  assert.ok(next.running.has(id)); assert.ok(await exists(path.join(next.home(id),'auth.json')));
+  // Still unreadable: the entry stays. Once readable and the shell is gone, it is sealed.
+  await next.checkRecovered(); assert.ok(next.running.has(id));
+  next.platform.processes = async () => []; await next.checkRecovered();
+  assert.equal(next.running.size,0); assert.equal(await exists(path.join(next.home(id),'auth.json')),false);
+});
+test('a forced refresh reuses a rotation another Codex already wrote to the shared desktop session',async t => {
+  const f = await fixture(t); await fs.writeFile(path.join(f.desktop,'auth.json'),auth('a')); const id = await f.service.importCurrent();
+  const first = await f.service.accessBundle(id);
+  const data = JSON.parse(auth('a').toString()); data.tokens.access_token = jwt({sub:'fixture-user-a',revision:'rotated-by-desktop',exp:Math.floor(Date.now()/1000)+3600});
+  await fs.writeFile(path.join(f.desktop,'auth.json'),JSON.stringify(data));
+  f.service.rpcFactory = () => { throw Error('refresh token spent a second time'); };
+  const bundle = await f.service.accessBundle(id,true);
+  assert.notEqual(bundle.accessToken,first.accessToken); assert.equal(bundle.accessToken,data.tokens.access_token);
+});
+test('a forced refresh still refreshes when the shared session was not rotated elsewhere',async t => {
+  const f = await fixture(t); await fs.writeFile(path.join(f.desktop,'auth.json'),auth('a')); const id = await f.service.importCurrent();
+  await f.service.accessBundle(id);
+  f.service.rpcFactory = () => { throw Error('refresh attempted'); };
+  await assert.rejects(f.service.accessBundle(id,true),/refresh attempted/);
+});
+test('a background desktop sync never overwrites a switch that happened while it was reading',async t => {
+  const f = await fixture(t); const a = await f.service.capture(auth('a')), b = await f.service.capture(auth('b'));
+  let release; const gate = new Promise(resolve => { release = resolve; });
+  const identityA = parseAuth(auth('a'));
+  f.service.desktopIdentity = async () => { await gate; return identityA; };
+  const sync = f.service.syncDesktop();
+  await f.service.exclusive(async () => { f.service.state.activeDesktopId = b.id; });
+  release(); await sync;
+  assert.equal(f.service.state.activeDesktopId,b.id); assert.notEqual(a.id,b.id);
 });
