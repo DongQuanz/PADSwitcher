@@ -51,3 +51,14 @@ test('unexpected process closure rejects all pending requests',async () => {
   const fake=fakeSpawn();const rpc=new CodexRpc('fixture.exe','C:/fixture',{spawn:fake.spawn});
   const promise=rpc.request('account/read');fake.child.emit('close',1);await assert.rejects(promise,{code:'RPC_CLOSED'});assert.equal(rpc.pending.size,0);
 });
+
+test('missing packaged helper reports an application repair instead of a Codex path error',async () => {
+  const platform=require('../src/core/platform.cjs'),original=platform.helperSource;
+  let rpc;
+  try {
+    platform.helperSource=()=>require('node:path').join(__dirname,'missing-helper','PADCodex.exe');
+    rpc=new CodexRpc('codex.exe',process.cwd());
+  } finally {platform.helperSource=original;}
+  await assert.rejects(rpc.initialize(),{code:'CODEX_HELPER_MISSING'});
+  rpc.lines.close();
+});

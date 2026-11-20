@@ -13,6 +13,7 @@ const {helperSource}=require('./platform.cjs');
 const {Recovery,continuation}=require('./recovery.cjs');
 const {ModelRouter}=require('./model-router.cjs');
 const {DesktopToolsPipe}=require('./desktop-tools.cjs');
+const {clientKind}=require('./client-kind.cjs');
 const START_METHODS=new Set(['turn/start','review/start']);
 const AUTH_METHODS=new Set(['account/login/start','account/login/cancel','account/logout']);
 const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
@@ -63,15 +64,17 @@ class Gateway {
       }
       const backendArgs=['app-server','--listen',this.backendUrl,'--ws-auth','capability-token','--ws-token-file',path.join(this.root,'backend-capability'),'-c','cli_auth_credentials_store="ephemeral"','-c','features.code_mode_host=true','-c','analytics.enabled=false',...(this.router?['-c','model_provider="openai"','-c','openai_base_url="'+this.router.baseUrl+'"']:[]),...(this.options.backendArgs||[])];
       const spawnOptions={env,cwd:this.service.state.settings.workspace,stdio:'ignore',windowsHide:true};
-      this.backend=this.options.spawn?this.options.spawn(this.executable,backendArgs,spawnOptions):spawn(this.helper,['--host',String(process.pid),this.executable,...backendArgs],spawnOptions);
-      this.backend.on('error',()=>this.backendFailed());this.backend.on('close',()=>{if(this.status!=='stopping'&&this.status!=='stopped')this.backendFailed();});
-      let socket;
-      for(let attempt=0;attempt<50;attempt++){try{socket=await connect(this.backendUrl,this.backToken);break;}catch{if(this.backend.exitCode!==null)break;await pause(100);}}
+      const backend=this.backend=this.options.spawn?this.options.spawn(this.executable,backendArgs,spawnOptions):spawn(this.helper,['--host',String(process.pid),this.executable,...backendArgs],spawnOptions);
+      // A backend that is stopped late (up to 3s after stop) must not fail the gateway that replaced it.
+      backend.on('error',()=>{if(this.backend===backend)this.backendFailed();});backend.on('close',()=>{if(this.backend===backend&&this.status!=='stopping'&&this.status!=='stopped')this.backendFailed();});
+      // Codex can take well over 5s to listen right after sign-in (antivirus scan, cold disk).
+      let socket;const deadline=Date.now()+(this.options.startTimeout??30000);
+      for(;;){try{socket=await connect(this.backendUrl,this.backToken);break;}catch{if(backend.exitCode!==null||Date.now()>=deadline)break;await pause(100);}}
       if(!socket)throw new UserError('Không khởi động được Codex gateway. Kiểm tra phiên bản Codex.', 'GATEWAY_START');
-      this.control=new WsRpc(socket);this.control.serverRequest=(m,p)=>this.serverRequest(m,p);
-      this.control.on('notification',(m,p)=>this.observe(m,p));
-      await this.control.initialize();
-      this.control.on('closed',()=>{if(!['stopping','stopped'].includes(this.status))this.backendFailed();});
+      const control=this.control=new WsRpc(socket);control.serverRequest=(m,p)=>this.serverRequest(m,p);
+      control.on('notification',(m,p)=>this.observe(m,p));
+      await control.initialize();
+      control.on('closed',()=>{if(this.control===control&&!['stopping','stopped'].includes(this.status))this.backendFailed();});
       this.pendingId=id;await this.applyPending();
       this.http=http.createServer((_req,res)=>{res.writeHead(404,{'Cache-Control':'no-store'});res.end();});
       this.wss=new WebSocketServer({noServer:true,maxPayload:MAX_FRAME,perMessageDeflate:false});
@@ -153,6 +156,8 @@ class Gateway {
   async reconcile(){
     if(this.reconcileFlight)return this.reconcileFlight;
     const generation=this.generation,control=this.control;
+    // Only turns that already existed before the thread list was read can be judged by it.
+    const known=new Set(this.turns.keys());
     this.reconcileFlight=(async()=>{
       const loaded=await control.request('thread/loaded/list',{limit:500});
       if(!Array.isArray(loaded.data)||loaded.nextCursor)throw new UserError('Chưa kiểm tra được toàn bộ tác vụ Codex. Giữ phiên hiện tại.', 'GATEWAY_TASK_CHECK');
@@ -166,7 +171,9 @@ class Gateway {
       for(const [key,t]of this.turns){
         const state=status.get(t.threadId);
         if((t.client===null||t.disconnected)&&state!=='active')this.turns.delete(key);
-        else if(t.turnId&&['idle','systemError'].includes(state)){this.turns.delete(key);if(this.router)this.knownTurns.delete(t.turnId);}
+        // A thread Codex has unloaded cannot be running a turn; keeping the record would
+        // block account changes, stopping the gateway and updates indefinitely.
+        else if(t.turnId&&(['idle','systemError','notLoaded'].includes(state)||(state===undefined&&t.threadId&&known.has(key)))){this.turns.delete(key);if(this.router)this.knownTurns.delete(t.turnId);}
       }
       this.changed();
     })().finally(()=>{this.reconcileFlight=null;});
@@ -223,9 +230,8 @@ class Gateway {
     if((this.router?/^thread\/(realtime|background)\//:/^thread\/(realtime|goal|background)\//).test(m.method||'')){this.clientError(c,m.id,'Background and realtime sessions are not supported by PADSwitcher gateway.');return;}
     if(m.method==='initialize'){
       if(c.initializeId===undefined&&!c.initializeAccepted&&m.id!=null){
-        const name=m.params?.clientInfo?.name;
         c.startup=m.params?._padswitcherStartup===true;
-        c.kind=this.options.clientKind||(['jetbrains','desktop'].includes(m.params?._padswitcherClient)?m.params._padswitcherClient:['codex_vscode','codex_vscode_copilot'].includes(name)?'vscode':['codex_cli_rs','codex_cli'].includes(name)?'cli':'other');c.initializeId=m.id;
+        c.kind=this.options.clientKind||clientKind(m.params);c.initializeId=m.id;
       }
       m.params={...m.params,capabilities:{...m.params?.capabilities,experimentalApi:true}};
       if(this.options.clientKind==='desktop'){
@@ -265,7 +271,9 @@ class Gateway {
   }
   fromBackend(c,data){
     let m;try{m=JSON.parse(data.toString());}catch{c.front.close(1007);return;}
-    if(m.id!=null&&!m.method&&c.initializeId===m.id){c.initializeAccepted=!m.error;c.initialized=c.initializeAccepted&&(['jetbrains','desktop'].includes(c.kind)||!!c.initializedReceived);delete c.initializeId;this.changed();}
+    // Current IDE extensions finish the handshake on the initialize response and
+    // omit initialized, as desktop and ACP clients already do.
+    if(m.id!=null&&!m.method&&c.initializeId===m.id){c.initializeAccepted=!m.error;c.initialized=c.initializeAccepted&&(['vscode','jetbrains','desktop'].includes(c.kind)||!!c.initializedReceived);delete c.initializeId;this.changed();}
     if(m.id!=null&&!m.method&&c.threadPending.has(m.id)){const auxiliary=c.threadPending.get(m.id);c.threadPending.delete(m.id);if(m.result?.thread?.id&&auxiliary)c.auxThreads.add(m.result.thread.id);}
     if(m.id!=null&&!m.method&&c.internal.has(m.id)){const p=c.internal.get(m.id);c.internal.delete(m.id);if(m.error)p.reject(new UserError('Codex chưa nhận lượt tiếp tục.', 'RECOVERY_START'));else p.resolve(m.result);this.trackStart(c,m);return;}
     if(m.id!=null&&!m.method&&typeof m.id==='string'&&m.id.startsWith('pad-auto-')){this.trackStart(c,m);return;}

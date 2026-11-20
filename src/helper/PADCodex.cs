@@ -79,7 +79,10 @@ internal static class PADCodex {
     static string ReadPrivate(string file, int limit) {
         if ((File.GetAttributes(file) & FileAttributes.ReparsePoint) != 0) throw new IOException();
         if (new FileInfo(file).Length > limit) throw new IOException();
-        return File.ReadAllText(file, Utf8);
+        // Allow PADSwitcher to replace or delete the file while it is being read,
+        // otherwise an atomic rewrite fails with EPERM on Windows.
+        using (var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+        using (var reader = new StreamReader(stream, Utf8)) return reader.ReadToEnd();
     }
     static string configurationFile;
     static Dictionary<string, object> Configuration() {
@@ -300,10 +303,24 @@ internal static class PADCodex {
         using (Process.Start(start)) return 0;
     }
     static bool RequestManager() {
-        string file = Path.Combine(Path.GetDirectoryName(configurationFile), "launcher.json");
+        string directory = Path.GetDirectoryName(configurationFile), file = Path.Combine(directory, "launcher.json");
         if (!File.Exists(file)) return false; // Connection turned off, or a source checkout.
-        using (var starter = Process.Start(new ProcessStartInfo(Process.GetCurrentProcess().MainModule.FileName, "--start-manager " + Quote(file)) { UseShellExecute = false, CreateNoWindow = true })) {
-            return starter.WaitForExit(5000) && starter.ExitCode == 0;
+        // After a reboot every restored editor window starts its own helper at once.
+        // Only one of them may open PADSwitcher; the rest wait for its connection.
+        bool owned = false; Mutex gate = null;
+        try {
+            gate = new Mutex(false, "Local\\PADSwitcher-start-manager");
+            try { owned = gate.WaitOne(20000); } catch (AbandonedMutexException) { owned = true; }
+            if (!owned) return true;
+            string stamp = Path.Combine(directory, "launcher.started");
+            try { if (File.Exists(stamp) && (DateTime.UtcNow - File.GetLastWriteTimeUtc(stamp)).TotalSeconds < 60) return true; } catch (IOException) { }
+            try { File.WriteAllText(stamp, DateTime.UtcNow.ToString("o")); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+            using (var starter = Process.Start(new ProcessStartInfo(Process.GetCurrentProcess().MainModule.FileName, "--start-manager " + Quote(file)) { UseShellExecute = false, CreateNoWindow = true })) {
+                return starter.WaitForExit(5000) && starter.ExitCode == 0;
+            }
+        } finally {
+            if (owned) gate.ReleaseMutex();
+            if (gate != null) gate.Dispose();
         }
     }
     static Uri Endpoint(out string token) {

@@ -6,7 +6,7 @@
 
 | Change targets | Base branch | Development guide |
 | --- | --- | --- |
-| Windows | `main` | [Windows setup](https://github.com/padduwcs/PADSwitcher/blob/main/docs/DEVELOPMENT.md) |
+| Windows | `main` | [Windows setup](https://github.com/DongQuanz/PADSwitcher/blob/main/docs/DEVELOPMENT.md) |
 | Linux/macOS | `feature/cross-platform` | [Unix setup](https://github.com/padduwcs/PADSwitcher/blob/feature/cross-platform/docs/DEVELOPMENT.md) |
 
 Create a topic branch from the appropriate base and target that same branch in
@@ -19,7 +19,7 @@ and run independently of source checkouts.
 
 ## Before changing code
 
-- Search [issues](https://github.com/padduwcs/PADSwitcher/issues) and existing pull requests.
+- Search [issues](https://github.com/DongQuanz/PADSwitcher/issues) and existing pull requests.
 - Discuss a large feature, protocol change or runtime major upgrade in an issue first.
 - Keep changes focused and update Vietnamese/English text together.
 - Update the appropriate changelog for user-visible behavior changes.
@@ -27,7 +27,8 @@ and run independently of source checkouts.
 
 ## Verify the change
 
-Both editions require Node.js 24+ and use these basic checks:
+This Windows fork requires Node.js 24.15+ in the 24.x line (or Node 26+).
+`.node-version` pins the runtime used by CI. Run these basic checks:
 
 ```bash
 npm run check
@@ -68,5 +69,5 @@ code changed. Generated helpers, installers, logs and screenshots from private
 account sessions do not belong in the commit.
 
 For security reports, use [SECURITY.md](SECURITY.md). For ordinary bugs, use the
-[issue templates](https://github.com/padduwcs/PADSwitcher/issues/new/choose) and
+[issue templates](https://github.com/DongQuanz/PADSwitcher/issues/new/choose) and
 include your app version, OS/architecture and reproduction steps.

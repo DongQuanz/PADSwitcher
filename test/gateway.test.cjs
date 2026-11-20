@@ -22,16 +22,28 @@ test('ACP JetBrains indicator accepts its successful handshake without requiring
   await assert.rejects(rejected.request('initialize',{clientInfo:{name:'jetbrains'},_padswitcherClient:'jetbrains',fixtureRejectInitialize:true}));assert.equal(g.view().connected.jetbrains,1);
   jb.close();await until(()=>g.view().connected.jetbrains===0);
 });
-test('client indicators require a successful initialize and initialized notification; disconnect removes them',async t=>{
+test('extension indicator accepts initialize without initialized; CLI waits for initialized and disconnect removes both',async t=>{
   const {g}=await ready(t),extension=new WsRpc(await connect(g.url,g.frontToken));t.after(()=>extension.close());
   assert.equal(g.view().connected.vscode,0);
   await extension.request('initialize',{clientInfo:{name:'codex_vscode',title:'Codex Extension'}});
-  assert.equal(g.view().connected.vscode,0);
+  await until(()=>g.view().connected.vscode===1);
   extension.send({method:'initialized',params:{}});await until(()=>g.view().connected.vscode===1);
   const cli=new WsRpc(await connect(g.url,g.frontToken));t.after(()=>cli.close());
-  await cli.request('initialize',{clientInfo:{name:'codex_cli_rs'}});cli.send({method:'initialized',params:{}});await until(()=>g.view().connected.cli===1);
+  await cli.request('initialize',{clientInfo:{name:'codex_cli_rs'}});assert.equal(g.view().connected.cli,0);cli.send({method:'initialized',params:{}});await until(()=>g.view().connected.cli===1);
   assert.equal(g.view().connected.vscode,1);extension.close();await until(()=>g.view().connected.vscode===0);assert.equal(g.view().connected.cli,1);
   assert(!JSON.stringify(g.view()).includes('Codex Extension'));
+});
+
+test('current extension without initialized counts only after acceptance and disappears on disconnect',async t=>{
+  const {g}=await ready(t),extension=new WsRpc(await connect(g.url,g.frontToken)),rejected=new WsRpc(await connect(g.url,g.frontToken));
+  t.after(()=>{extension.close();rejected.close();});
+  assert.equal(g.view().connected.vscode,0);
+  await assert.rejects(rejected.request('initialize',{clientInfo:{name:'VS Code',title:'Codex Extension'},fixtureRejectInitialize:true}));
+  assert.equal(g.view().connected.vscode,0);
+  await extension.request('initialize',{clientInfo:{name:'VS Code',title:'Codex Extension'}});
+  await until(()=>g.view().connected.vscode===1);
+  assert((await extension.request('account/read')).account);
+  extension.close();await until(()=>g.view().connected.vscode===0);
 });
 test('a rejected handshake, unknown client and CLI never appear as a connected extension',async t=>{
   const {g}=await ready(t),rejected=new WsRpc(await connect(g.url,g.frontToken));t.after(()=>rejected.close());
@@ -205,4 +217,20 @@ test('native reconciliation cannot discard the original turn context needed for 
   g.turns.clear();await g.reconcile();assert.equal([...g.turns.values()][0].client,null);
   await c.request('fixture/complete',{turnId:first.turn.id,quota:true});await until(()=>g.recovery.events.some(e=>e.type==='continued'));
   const turns=(await c.request('fixture/turns')).turns;assert.equal(turns[1].params.approvalPolicy,'on-request');assert.equal(turns.length,2);
+});
+test('reconciliation releases a turn whose thread Codex no longer has loaded',async t=>{
+  const {g,c}=await ready(t);
+  await c.request('turn/start',{threadId:'gone'});
+  const [key,turn]=[...g.turns].find(([,x])=>x.threadId==='gone');
+  // Native Codex unloaded the thread: a lingering record would block every later switch or stop.
+  turn.turnId='unloaded-turn';g.turns.set(key,turn);
+  const original=g.control.request.bind(g.control);
+  g.control.request=async(method,params)=>method==='thread/loaded/list'?{data:[],nextCursor:null}:original(method,params);
+  await g.reconcile();assert.equal([...g.turns.values()].some(x=>x.threadId==='gone'),false);
+});
+test('a late exit of a replaced backend does not fail the new gateway',async t=>{
+  const {g,a}=await ready(t),old=g.backend;
+  await g.stop(true);await g.start(a.id);assert.equal(g.status,'ready');
+  old.emit('close');old.emit('error',Error('late'));
+  assert.equal(g.status,'ready');
 });

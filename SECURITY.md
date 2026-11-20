@@ -32,7 +32,7 @@ Sandboxing and tool approvals stay with native Codex.
 
 Account fallback is opt-in, limited to supported personal accounts and confirmed
 quota rejection before output. Reset credits require explicit confirmation.
-See [Windows routing](https://github.com/padduwcs/PADSwitcher/blob/main/ROUTING.en.md)
+See [Windows routing](https://github.com/DongQuanz/PADSwitcher/blob/main/ROUTING.en.md)
 and [Unix routing](https://github.com/padduwcs/PADSwitcher/blob/feature/cross-platform/docs/architecture/ROUTING.en.md)
 for edition-specific behavior and validation.
 
@@ -50,12 +50,12 @@ The app does not bypass execution policy or alter default Kaggle credentials.
 
 ## Report a vulnerability
 
-Use [GitHub private vulnerability reporting](https://github.com/padduwcs/PADSwitcher/security/advisories/new)
+Use [GitHub private vulnerability reporting](https://github.com/DongQuanz/PADSwitcher/security/advisories/new)
 when available. Include the affected edition/version, impact, reproduction and a
 minimal proof with credentials removed. Allow time for coordinated remediation.
 If private reporting is unavailable, open an issue requesting a private contact
 without publishing exploit details or account data.
 
-Ordinary bugs go to [GitHub Issues](https://github.com/padduwcs/PADSwitcher/issues/new/choose).
+Ordinary bugs go to [GitHub Issues](https://github.com/DongQuanz/PADSwitcher/issues/new/choose).
 Include app version, operating system/architecture and steps to reproduce; redact
 screenshots. See [Support](SUPPORT.md).

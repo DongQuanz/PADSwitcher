@@ -48,13 +48,13 @@ class DesktopIntegration {
   }
   get configured() { return this.record.enabled; }
   async installed() { return this.options.installed ? this.options.installed() : installedDesktop(); }
-  async init() {
+  async init({ probe = true } = {}) {
     if (await exists(this.file)) {
       const record = JSON.parse((await readLimited(this.file, 16384)).toString('utf8'));
       if (record.version !== 1 || typeof record.enabled !== 'boolean' || typeof record.home !== 'string' || !path.isAbsolute(record.home)) throw new UserError('Cấu hình desktop không hợp lệ. Giữ nguyên dữ liệu để kiểm tra.', 'DESKTOP_CONFIG');
       this.record = { version: 1, enabled: record.enabled, home: record.home };
     }
-    return this.status();
+    return probe ? this.status() : this.view();
   }
   view() {
     const gateway = this.hub.desktop;

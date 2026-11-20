@@ -6,8 +6,9 @@ const {Gateway}=require('./gateway.cjs');
 const {MAX_FRAME}=require('./ws-rpc.cjs');
 const {SCOPES}=require('./client-routes.cjs');
 const {UserError}=require('./errors.cjs');
+const {clientKind}=require('./client-kind.cjs');
 const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
-function kind(m){const n=m.params?.clientInfo?.name;return m.params?._padswitcherClient==='jetbrains'?'jetbrains':['codex_vscode','codex_vscode_copilot'].includes(n)?'vscode':['codex_cli_rs','codex_cli'].includes(n)?'cli':'other';}
+function kind(message){return clientKind(message.params);}
 class GatewayHub{
   constructor(service,options={}){
     this.service=service;this.options=options;this.private=new Map();this.waiting=new Set();this.transitions=new Map();this.flight=null;
@@ -108,7 +109,7 @@ class GatewayHub{
       bytes+=data.length;let m;try{m=JSON.parse(data.toString());}catch{front.close(1007);return;}
       if(bytes>MAX_FRAME||m?.method!=='initialize'||m.id==null){front.close(1008,'Initialize required');return;}
       const scope=kind(m);if(this.transitions.has(scope)){front.close(1013,'Account mode changing');return;}
-      const g=this.route(scope==='other'?'shared':scope);
+      const g=this.route(['other','desktop'].includes(scope)?'shared':scope);
       if(!g||g.status!=='ready'){front.close(1013,'Selected connection is not ready');return;}
       clean();g.attach(front,[data]);
     };

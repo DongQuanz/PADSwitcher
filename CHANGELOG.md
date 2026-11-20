@@ -1,5 +1,57 @@
 # Changelog
 
+## 1.21.1 — 2026-11-20
+
+Maintained in the [DongQuanz fork](https://github.com/DongQuanz/PADSwitcher) by
+[@DongQuanz](https://github.com/DongQuanz), building on Anh-Duc Phan's PADSwitcher.
+
+### Changed — fork release channel
+
+- Windows updates and package metadata now use `DongQuanz/PADSwitcher`. The updater
+  derives its release channel and allowed assets from `package.json.repository.url`.
+  A fork with no stable release reports no update instead of a GitHub error.
+- Release automation explicitly targets its own repository and checks the package
+  repository before publishing, preventing accidental upstream publication.
+- Development and CI use Node 24.15.0, matching the minimum 24.x version supported
+  by the locked dependencies; incompatible engines are rejected during installation.
+- The Kaggle pagination regression test waits for both account requests to start
+  instead of assuming token reads finish within 15 milliseconds.
+
+### Fixed — startup after sign-in and desynchronisation
+
+- Every launch of the portable build now unpacks into its own temporary folder.
+  Several launches at once (an editor restoring windows after a reboot) used to
+  share one folder and delete `PADCodex.exe` from the running copy, causing the
+  "Thiếu cầu nối PADCodex.exe" error or a Windows error box.
+- Restored editor windows no longer each open PADSwitcher: one helper starts it and
+  the others wait for its connection. The helper reads its connection files with
+  delete sharing, so PADSwitcher can replace them while they are read.
+- File replacement retries a rename that Windows briefly refuses (`EPERM`, `EBUSY`,
+  `EACCES`) instead of failing the operation.
+- Startup retries transient PowerShell/WMI failures, no longer waits for the
+  installed-app probe before showing the window, and the error box names the error
+  code and the log `startup-error.log` in `%APPDATA%\PADSwitcher`. Uncaught errors are
+  logged instead of opening Electron's default error dialog.
+- The gateway waits up to 30 seconds for Codex to listen, and an enabled connection
+  that fails at boot is retried in the background.
+- A backend that stops late can no longer mark its replacement as failed; a turn
+  whose thread Codex has unloaded no longer blocks switching, stopping or updating.
+- A recorded CLI session is matched by process start time, so a reused process id
+  after a reboot is not treated as a running CLI. If the process list cannot be read
+  at startup, recorded sessions are kept instead of being sealed.
+- A refused quit no longer disables automatic quota refresh for the rest of the session.
+- When the gateway asks to refresh a session that another Codex shares (the current
+  desktop account or an open CLI), PADSwitcher first uses a newer, still-valid token that
+  process already wrote. Spending the refresh token a second time signed that client out.
+- A background desktop sync can no longer overwrite the account set by a switch or
+  restore that ran while it was reading `auth.json`.
+- Integration status polls every 3 seconds only while the window is visible; hidden in
+  the tray it checks once a minute, and focusing the window still checks at once.
+- Current VS Code, Cursor and Windsurf extensions, which identify themselves by the
+  editor's display name, are routed and counted as IDE clients again. They are shown as
+  connected after the initialize response, since they no longer send `initialized`.
+- A missing `PADCodex.exe` is reported as such instead of a generic Codex start error.
+
 ## 1.21.0 — 2026-11-07
 
 ### Changed

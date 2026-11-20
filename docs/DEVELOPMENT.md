@@ -1,14 +1,26 @@
 # Development
 
-Use Windows 10/11 x64, Node.js 24 LTS, Git and .NET Framework 4.8. The native helper
+Use Windows 10/11 x64, Node.js 24.15+ in the 24.x LTS line, Git and .NET Framework 4.8. The native helper
 is compiled with the Windows .NET Framework C# compiler; it is generated, not tracked.
 
 ```powershell
-git clone https://github.com/padduwcs/PADSwitcher.git
+git clone https://github.com/DongQuanz/PADSwitcher.git
 cd PADSwitcher
 npm ci
 npm start
 ```
+
+`.node-version` pins the development and CI runtime to 24.15.0. Use a version
+manager that reads this file or install a compatible Node version before `npm ci`.
+Node 26+ is also accepted by the dependency engine constraints; Node 25 is not.
+`.npmrc` rejects incompatible engines rather than silently installing unsupported
+dependencies. The system Node installation is independent of this checkout.
+
+This fork publishes Windows updates from `DongQuanz/PADSwitcher`.
+`package.json.repository.url` is the single source for the updater's release
+channel and asset allowlist. A repository with no stable release simply has no
+update available; it never falls back to upstream releases. Historical validation
+records and Unix documentation still describe the upstream project.
 
 `npm start`, `npm test`, `npm run build` and `npm run dist` build the helper first.
 Use a local Codex CLI or the Windows Codex extension, version 0.160.0 or later;
@@ -52,7 +64,8 @@ credits or require logging into a real account. The packaged smoke check runs af
 `dist/PADSwitcher-<version>-Windows.exe`. GitHub Actions checks and builds on Windows.
 For a release, follow [RELEASING.md](RELEASING.md); a version tag runs the isolated
 checks and publishes the tested executable with its SHA-256 file through GitHub Releases.
-The portable build currently has no code-signing certificate or automatic updater.
+The portable build is unsigned. Its updater downloads releases from this fork,
+verifies the SHA-256 checksum and installs only after the user's update action.
 
 ## Say hi
 

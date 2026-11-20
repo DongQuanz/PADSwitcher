@@ -12,6 +12,18 @@ async function assertDirectory(directory) {
   const stat = await fs.lstat(directory);
   if (!stat.isDirectory() || stat.isSymbolicLink()) throw new UserError('Thư mục liên kết không được hỗ trợ để bảo vệ dữ liệu.', 'UNSAFE_PATH');
 }
+// Defender, the search indexer, cloud sync or a reader that has the target open can make
+// a Windows rename fail briefly with EPERM/EBUSY/EACCES. Wait it out instead of failing.
+const TRANSIENT_RENAME = new Set(['EPERM', 'EBUSY', 'EACCES']);
+async function renameRetry(from, to, { attempts = 20, delay = 100 } = {}) {
+  for (let attempt = 1; ; attempt++) {
+    try { return await fs.rename(from, to); }
+    catch (error) {
+      if (attempt >= attempts || !TRANSIENT_RENAME.has(error?.code)) throw error;
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
+  }
+}
 async function atomicWrite(file, data) {
   await assertDirectory(path.dirname(file));
   if (await exists(file)) await assertRegular(file);
@@ -20,7 +32,7 @@ async function atomicWrite(file, data) {
   try {
     handle = await fs.open(temp, 'wx', 0o600);
     await handle.writeFile(data); await handle.sync(); await handle.close(); handle = null;
-    await fs.rename(temp, file);
+    await renameRetry(temp, file);
   } finally { await handle?.close(); await fs.unlink(temp).catch(() => {}); }
 }
 function profilePath(root, id) {
@@ -35,4 +47,4 @@ async function readLimited(file, max = 1024 * 1024) {
   if (stat.size > max) throw new UserError('Tệp lớn bất thường; không thể đọc an toàn.', 'FILE_TOO_LARGE');
   return fs.readFile(file);
 }
-module.exports = { exists, assertRegular, assertDirectory, atomicWrite, profilePath, readLimited };
+module.exports = { exists, assertRegular, assertDirectory, atomicWrite, renameRetry, profilePath, readLimited };
