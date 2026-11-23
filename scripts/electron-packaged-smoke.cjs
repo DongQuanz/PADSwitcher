@@ -80,10 +80,30 @@ app.disableHardwareAcceleration();
       console.log('Packaged separate native route setup, policy IPC and rejoining preserve the connected extension: passed.');
       win.close();assert.equal(win.isDestroyed(),false);assert.equal(win.isVisible(),false);
       assert.equal((await action('state')).result.gateway.status,'ready');
-      await rpc.close();rpc=null;const stopped=await action('stopGateway');assert(stopped.ok);
-      assert.deepEqual(await fs.readFile(path.join(home,'auth.json')),before);
-      console.log('Packaged ASAR, native helper extraction/host, stdio bridge, tray close and preserved fixture login: passed.');
-      clearTimeout(timer);app.exit(0);
+      await rpc.close();rpc=null;
+      // Exercise the real before-quit path with a persisted packaged-app launcher.
+      const launcher=path.join(path.dirname(helper),'launcher.json');
+      await fs.writeFile(launcher,JSON.stringify({version:1,executable:process.execPath}));
+      app.once('will-quit',event=>{
+        event.preventDefault();
+        (async()=>{
+          await assert.rejects(fs.access(launcher),{code:'ENOENT'});
+          await assert.rejects(fs.access(connection),{code:'ENOENT'});
+          const independent=path.join(dir,'independent-codex');await fs.mkdir(independent);
+          rpc=new CodexRpc(helper,independent,{isolated:true,fileStore:true,spawn:(exe,args,options)=>{
+            const env={...options.env};delete env.PADSWITCHER_CONNECTION_FILE;delete env.PADSWITCHER_CLIENT_KIND;
+            return spawn(exe,args,{...options,env});
+          }});
+          const initialized=await rpc.request('initialize',{clientInfo:{name:'codex_vscode',version:'fixture'}});
+          assert.equal(path.resolve(initialized.codexHome).toLowerCase(),independent.toLowerCase());rpc.send({method:'initialized',params:{}});
+          assert.equal((await rpc.request('account/read',{refreshToken:false})).account,null);
+          await rpc.close();rpc=null;
+          assert.deepEqual(await fs.readFile(path.join(home,'auth.json')),before);
+          console.log('Packaged quit removes the manager launcher; VS Code starts independent native Codex without changing the original login: passed.');
+          clearTimeout(timer);app.exit(0);
+        })().catch(e=>{clearTimeout(timer);console.error('Packaged quit verification failed:',e.code||e.name,e.code==='ERR_ASSERTION'?e.message:'');app.exit(1);});
+      });
+      app.quit();
     }catch(e){clearTimeout(timer);await rpc?.close();const location=String(e.stack||'').split('\n').find(line=>line.includes('electron-packaged-smoke.cjs:'));console.error('Packaged verification failed:',e.code||e.name,e.code==='ERR_ASSERTION'?e.message:'',location?.trim()||'');app.exit(1);}
   }));
   const packagedRoot=path.resolve(process.env.PADSWITCHER_PACKAGED_ROOT||'dist/win-unpacked');

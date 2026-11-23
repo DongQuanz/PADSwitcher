@@ -85,6 +85,9 @@ class Gateway {
       await new Promise((r,j)=>{this.http.once('error',j);this.http.listen(0,'127.0.0.1',r);});
       this.url=`ws://127.0.0.1:${this.http.address().port}`;
       await atomicWrite(path.join(this.root,'connection.json'),JSON.stringify({version:1,url:this.url,tokenFile:path.join(this.root,'client-capability'),executable:this.executable,home:this.service.state.settings.desktopHome}));
+      // Keep only the native runtime for new VS Code sessions after the manager exits.
+      // Its login and home come from VS Code's own environment, never this connection.
+      if(!this.options.scope||this.options.scope==='shared')await atomicWrite(path.join(this.root,'standalone.json'),JSON.stringify({version:1,executable:this.executable}));
       this.status='ready';this.service.state.gatewayEnabled=true;await this.service.save();this.changed();
       this.pollTimer=setInterval(()=>{
         this.recovery.tick();

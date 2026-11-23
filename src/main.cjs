@@ -73,6 +73,12 @@ function updateLauncher() {
   const executable=app.isPackaged?portableExecutable()||process.execPath:null;
   return syncManagerLauncher(service,executable).catch(()=>{}); // Only a convenience: never fail the action.
 }
+async function stopGatewayForQuit(force=false) {
+  // An explicit quit must not let the next editor session open the manager again.
+  await syncManagerLauncher(service,null);
+  try{await gateway.stop(force);}
+  catch(error){await updateLauncher();throw error;}
+}
 // The replacement starts after this process exits, so nothing may keep it alive.
 function quitForUpdate() {
   shutdown=true;clearInterval(timer);clearInterval(kaggleTimer);clearInterval(integrationTimer);clearInterval(updateTimer);
@@ -299,7 +305,7 @@ async function openWindow() {
     if(service.busy||service.sayHi.flight||gateway.status!=='stopped'||phone.status!=='stopped'||kaggle.flights.size||kaggle.toolFlight||kaggle.saveFlight){
       event.preventDefault();if(shutdown)return;shutdown=true;
       clearInterval(kaggleTimer);
-      Promise.all([phone.stop(true),service.close(),gateway.stop(),kaggle.shutdown()]).then(()=>{quitting=true;clearInterval(timer);tray?.destroy();app.quit();},error=>{shutdown=false;service.closing=false;window.show();dialog.showMessageBox(window,{type:'info',message:publicError(error).message});});
+      Promise.all([phone.stop(true),service.close(),stopGatewayForQuit(),kaggle.shutdown()]).then(()=>{quitting=true;clearInterval(timer);tray?.destroy();app.quit();},error=>{shutdown=false;service.closing=false;window.show();dialog.showMessageBox(window,{type:'info',message:publicError(error).message});});
     }else{quitting=true;clearInterval(timer);tray?.destroy();}
   });
 }

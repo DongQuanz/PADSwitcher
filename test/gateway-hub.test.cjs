@@ -2,6 +2,7 @@
 const test=require('node:test'),assert=require('node:assert/strict'),path=require('node:path'),fs=require('node:fs/promises'),{spawn}=require('node:child_process');
 const {GatewayHub}=require('../src/core/gateway-hub.cjs'),{ModelRouter}=require('../src/core/model-router.cjs');
 const {connect,WsRpc}=require('../src/core/ws-rpc.cjs'),{fixture,auth}=require('./helpers.cjs');
+const {once}=require('node:events');
 const pause=ms=>new Promise(r=>setTimeout(r,ms));
 async function ready(t){
   const cleanup=[];const f=await fixture({after:fn=>cleanup.push(fn)}),profiles=[];
@@ -46,12 +47,12 @@ test('private quota fallback preserves request bytes and affects only that route
   await pause(1100);assert.equal((await vs.request('account/read')).account.email,email('b'));assert.equal((await jb.request('account/read')).account.email,email('c'));
   await service.autoSwitchSettings({scope:'vscode',enabled:false,order:[a.id,b.id]});assert.equal(service.state.clientRoutes.jetbrains.autoSwitch.enabled,true);assert.equal(service.state.autoSwitch.enabled,false);
 });
-test('mode changes refuse active work, disconnect only the changed idle client and preserve shared users',async t=>{
+test('mode changes refuse active work, disconnect only the changed idle client and preserve shared users',{timeout:20000},async t=>{
   const {hub,profiles:[a,b],client}=await ready(t),vs=await client('vscode'),jb=await client('jetbrains');
   const turn=(await vs.request('turn/start',{threadId:'vs-thread',input:[{type:'text',text:'Work'}]})).turn;
   await assert.rejects(hub.configure({scope:'vscode',mode:'private',profileId:b.id}),{code:'GATEWAY_ACTIVE'});assert.equal(hub.view().scopes.vscode.mode,'shared');
-  await vs.request('fixture/complete',{turnId:turn.id});await pause(20);await hub.configure({scope:'vscode',mode:'private',profileId:b.id});await pause(20);assert.equal(vs.socket.readyState,3);assert.equal((await jb.request('account/read')).account.email,email('a'));
-  const replacement=await client('vscode');assert.equal((await replacement.request('account/read')).account.email,email('b'));await hub.configure({scope:'vscode',mode:'shared'});await pause(20);assert.equal(replacement.socket.readyState,3);assert.equal((await jb.request('account/read')).account.email,email('a'));assert.equal(hub.private.has('vscode'),false);
+  await vs.request('fixture/complete',{turnId:turn.id});await pause(20);const vsClosed=once(vs.socket,'close');await hub.configure({scope:'vscode',mode:'private',profileId:b.id});await vsClosed;assert.equal(vs.socket.readyState,3);assert.equal((await jb.request('account/read')).account.email,email('a'));
+  const replacement=await client('vscode');assert.equal((await replacement.request('account/read')).account.email,email('b'));const replacementClosed=once(replacement.socket,'close');await hub.configure({scope:'vscode',mode:'shared'});await replacementClosed;assert.equal(replacement.socket.readyState,3);assert.equal((await jb.request('account/read')).account.email,email('a'));assert.equal(hub.private.has('vscode'),false);
 });
 test('pending manual switches wait only for their private route and whole-app stop protects all routes',async t=>{
   const {hub,profiles:[a,b,c],client}=await ready(t);await hub.configure({scope:'vscode',mode:'private',profileId:a.id});await hub.configure({scope:'jetbrains',mode:'private',profileId:c.id});

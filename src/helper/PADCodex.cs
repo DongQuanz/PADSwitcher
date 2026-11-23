@@ -349,6 +349,26 @@ internal static class PADCodex {
             Thread.Sleep(500);
         }
     }
+    static int Standalone(string[] args) {
+        // Only an ordinary VS Code launch may return to its own Codex installation.
+        // Explicit gateway CLI, desktop and ACP clients retain their selected account.
+        if (!String.IsNullOrEmpty(Environment.GetEnvironmentVariable("PADSWITCHER_CLIENT_KIND")) ||
+            !String.IsNullOrEmpty(Environment.GetEnvironmentVariable("PADSWITCHER_CONNECTION_FILE")) ||
+            File.Exists(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "launcher.json")) ||
+            File.Exists(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "connection.json"))) throw new IOException();
+        var config = new JavaScriptSerializer().Deserialize<Dictionary<string, object>>(
+            ReadPrivate(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "standalone.json"), 16384));
+        if (!config.ContainsKey("version") || Convert.ToInt32(config["version"]) != 1) throw new IOException();
+        string executable = StringValue(config, "executable");
+        if (!Path.IsPathRooted(executable) || !File.Exists(executable) ||
+            !String.Equals(Path.GetFileName(executable), "codex.exe", StringComparison.OrdinalIgnoreCase) ||
+            String.Equals(Path.GetFullPath(executable), Process.GetCurrentProcess().MainModule.FileName, StringComparison.OrdinalIgnoreCase)) throw new IOException();
+        // Host supervises the native process, relays stdio and keeps the caller's
+        // arguments/environment. Do not inject a remote endpoint, account or home.
+        var hostArgs = new List<string> { "--host-stdio", Process.GetCurrentProcess().Id.ToString(), executable };
+        hostArgs.AddRange(args);
+        return Host(hostArgs.ToArray());
+    }
     public static int Main(string[] args) {
         bool startup = Array.IndexOf(args, "--print-startup-config") >= 0;
         try {
@@ -356,7 +376,13 @@ internal static class PADCodex {
             if (args.Length == 3 && args[0] == "--tools-pipe") return ToolsPipe(args);
             if (args.Length == 2 && args[0] == "--start-manager") return StartManager(args[1]);
             bool server = Array.IndexOf(args, "app-server") >= 0;
-            if (server && !startup) { Bridge(ConnectWhenReady()).GetAwaiter().GetResult(); return 0; }
+            if (server && !startup) {
+                ClientWebSocket connected;
+                try { connected = ConnectWhenReady(); }
+                catch { return Standalone(args); }
+                // Once connected, never replay a managed request on another account.
+                Bridge(connected).GetAwaiter().GetResult(); return 0;
+            }
             string token; Uri url = Endpoint(out token); var config = Configuration();
             if (startup) {
                 if (!server || Array.IndexOf(args, "--startup-sign-out") >= 0) throw new IOException();

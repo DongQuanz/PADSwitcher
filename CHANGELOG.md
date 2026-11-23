@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Fixed
+
+- After explicitly quitting PADSwitcher or stopping its gateway, a newly opened
+  VS Code Codex session can use native Codex with its original home, settings and
+  sign-in. Quitting also removes the helper's manager launcher, so opening Codex
+  independently does not restart PADSwitcher. Existing managed turns are never
+  replayed through the independent account; reconnect or reload VS Code after quit.
+
 ### Added
 
 - An opt-in phone connection on the local Wi-Fi/LAN: pair one browser by QR code,

@@ -14,6 +14,15 @@ async function ready(t){
   return {...f,g,c,a,b};
 }
 async function until(condition){for(let i=0;i<100&&!condition();i++)await pause(20);assert(condition());}
+
+test('stopping the gateway preserves only the native runtime needed for independent VS Code sessions',async t=>{
+  const {g}=await ready(t),file=path.join(g.root,'standalone.json');
+  assert.deepEqual(JSON.parse(await fs.readFile(file,'utf8')),{version:1,executable:g.executable});
+  await g.stop(true);
+  await assert.rejects(fs.access(path.join(g.root,'connection.json')),{code:'ENOENT'});
+  await assert.rejects(fs.access(path.join(g.root,'client-capability')),{code:'ENOENT'});
+  assert.deepEqual(JSON.parse(await fs.readFile(file,'utf8')),{version:1,executable:g.executable});
+});
 test('ACP JetBrains indicator accepts its successful handshake without requiring the optional initialized notification',async t=>{
   const {g}=await ready(t),jb=new WsRpc(await connect(g.url,g.frontToken));t.after(()=>jb.close());
   await jb.request('initialize',{clientInfo:{name:'jetbrains'},_padswitcherClient:'jetbrains'});await until(()=>g.view().connected.jetbrains===1);
