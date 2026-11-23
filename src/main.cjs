@@ -213,7 +213,7 @@ async function openWindow() {
         }
         case 'phoneReset': await phone.resetPairing();break;
         case 'claudeStatusLine': result=args.enabled===true?await phone.claudeUsage.install():await phone.claudeUsage.remove();service.changed();break;
-        case 'phoneQR': result=phone.qr(typeof args.ip==='string'?args.ip:null);break;
+        case 'phoneQR': result=await phone.qr(typeof args.ip==='string'?args.ip:null,args.requestId,args.pairingVersion);break;
         case 'updateCheck': result = await updater.check(); break;
         case 'updateDownload': result = await updater.download(); break;
         case 'updateCancel': updater.cancel(); break;

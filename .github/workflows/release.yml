@@ -67,6 +67,7 @@ jobs:
       - run: npm run smoke:continuity
       - run: npm run smoke:desktop
       - run: npm run smoke:ui
+      - run: npm run smoke:phone
       - run: npm run dist
       - run: node scripts/run-electron.cjs scripts/electron-packaged-smoke.cjs
       - run: npm run smoke:executables

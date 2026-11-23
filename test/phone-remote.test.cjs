@@ -101,13 +101,13 @@ async function setup(t){
     const r=await fetch(base+'/api/call',{method:'POST',headers:{'Content-Type':'application/json','X-Pad-Signature':sign(secret,'POST\n/api/call\n'+body)},body});
     return {status:r.status,body:await r.json()};
   };
-  const events=()=>new Promise((resolve,reject)=>{
-    const t0=Date.now(),n=crypto.randomBytes(8).toString('hex'),s=sign(remote.pairing.secret,['GET','/api/events',device,t0,n].join('\n'));
-    const req=http.get(base+`/api/events?d=${device}&t=${t0}&n=${n}&s=${s}`,res=>{
+  const events=({connectionId=crypto.randomBytes(16).toString('hex')}={})=>new Promise((resolve,reject)=>{
+    const t0=Date.now(),n=crypto.randomBytes(8).toString('hex'),s=sign(remote.pairing.secret,['GET','/api/events',device,t0,n,connectionId].join('\n'));
+    const req=http.get(base+`/api/events?d=${device}&t=${t0}&n=${n}&s=${s}&c=${connectionId}`,res=>{
       const got=[];let buffer='';const waiters=[];
       res.on('data',chunk=>{buffer+=chunk;let i;while((i=buffer.indexOf('\n\n'))>=0){const block=buffer.slice(0,i);buffer=buffer.slice(i+2);const ev=/^event: (.*)$/m.exec(block),data=/^data: (.*)$/m.exec(block);if(ev){got.push({event:ev[1],data:JSON.parse(data[1])});for(const w of waiters.splice(0))w();}}});
       const next=async(name)=>{for(;;){const found=got.findIndex(e=>e.event===name);if(found>=0)return got.splice(found,1)[0].data;await new Promise(r=>waiters.push(r));}};
-      resolve({status:res.statusCode,next,close:()=>req.destroy()});
+      resolve({status:res.statusCode,next,connectionId,close:()=>req.destroy()});
     });req.on('error',reject);
   });
   return {remote,gateway,service,selected,opened,terminals,post,events,base,claude,setDevice:d=>{device=d;}};
@@ -126,21 +126,129 @@ test('requests must be signed, fresh and unique; the first phone is bound and a 
   assert.equal((await post('hello',{},{secret:old})).status,403);
   assert.equal((await post('hello',{},{as:'device-bbbbbbbb'})).status,200,'a new phone can pair after a new code');
 });
+
+test('an open but unresponsive phone stream loses its connected status after the heartbeat lease',async t=>{
+  const {remote,events}=await setup(t);let now=Date.now();remote.now=()=>now;
+  const stream=await events();t.after(()=>stream.close());await stream.next('overview');
+  assert.equal(remote.view().phoneConnected,true);
+  now+=46000;remote.idle();
+  assert.equal(remote.view().phoneConnected,false,'a TCP socket alone is not evidence that the phone tab is still there');
+  assert.equal(remote.stream,null,'the expired stream is actually closed');
+});
+
+test('a newly shown QR grants a fresh key that old tabs cannot claim with their previous key',async t=>{
+  const {remote,post}=await setup(t);await post('hello');const old=remote.pairing.secret;
+  const code=await remote.qr('127.0.0.1','qr-request-aaaaaa'),url=new URL(code.url),key=new URLSearchParams(url.hash.slice(1)).get('k');
+  assert.notEqual(key,old,'showing a QR issues a separate pairing capability');
+  assert(url.searchParams.get('pair'),'each fresh scan navigates the browser instead of only changing its hash');
+  assert.equal((await post('hello',{},{secret:old})).status,200,'the existing paired phone may still finish its work');
+  assert.equal((await post('hello',{},{secret:old,as:'device-old-lostid'})).status,409,'another old tab cannot use the new QR window');
+  const again=await remote.qr('127.0.0.1','qr-request-aaaaaa');assert.equal(again.url,code.url,'the same QR request can be retried without invalidating the displayed code');
+  assert.equal((await post('hello',{},{secret:key,as:'device-fresh-scan'})).status,200);
+  assert.equal(remote.pairing.device,'device-fresh-scan');
+  assert.equal((await post('hello',{},{secret:old})).status,403);
+});
+
+test('a delayed disconnect from a previous phone tab cannot close the current stream',async t=>{
+  const {remote,events,post}=await setup(t);
+  const first=await events();t.after(()=>first.close());await first.next('overview');
+  const second=await events();t.after(()=>second.close());await second.next('overview');
+  const old=await post('disconnect',{connectionId:first.connectionId});assert.equal(old.body.ok,true);
+  assert.equal(remote.view().phoneConnected,true);
+  const closed=await post('disconnect',{connectionId:second.connectionId});assert.equal(closed.body.ok,true);
+  assert.equal(remote.view().phoneConnected,false);
+});
+
+test('only a signed heartbeat for the current stream renews the phone lease',async t=>{
+  const {remote,events,post}=await setup(t);let now=Date.now();remote.now=()=>now;
+  const stream=await events();t.after(()=>stream.close());await stream.next('overview');
+  now+=30000;
+  assert.equal((await post('heartbeat',{connectionId:stream.connectionId})).body.result.connected,true);
+  now+=30000;remote.idle();assert.equal(remote.view().phoneConnected,true,'a live tab renewed the lease');
+  assert.equal((await post('heartbeat',{connectionId:'a-previous-stream'})).body.result.connected,false);
+  now+=16000;remote.idle();assert.equal(remote.view().phoneConnected,false,'an old tab cannot renew another stream');
+});
+
+test('the heartbeat lease closes the stream on time without waiting for the next periodic poll',async t=>{
+  const {remote,events,post}=await setup(t),stream=await events();t.after(()=>stream.close());await stream.next('overview');
+  t.mock.timers.enable({apis:['setTimeout']});
+  try{
+    await post('heartbeat',{connectionId:stream.connectionId});
+    t.mock.timers.tick(45000);
+    assert.equal(remote.stream,null);assert.equal(remote.view().phoneConnected,false);
+  }finally{t.mock.timers.reset();}
+});
+
+test('simultaneous scans claim a QR once and persist the same winning device',async t=>{
+  const {remote,post}=await setup(t),code=await remote.qr('127.0.0.1','simultaneous-qr');
+  const key=new URLSearchParams(new URL(code.url).hash.slice(1)).get('k');
+  const results=await Promise.all(['device-first-scan','device-second-scan'].map(as=>post('hello',{},{secret:key,as})));
+  assert.deepEqual(results.map(r=>r.status).sort(),[200,409]);
+  assert.equal(JSON.parse(await fs.readFile(remote.file,'utf8')).device,remote.pairing.device);
+  assert.equal(remote.pairing.secret,key);
+  assert(!JSON.stringify(remote.view()).includes(key),'the grant never enters broadcast state');
+});
+
+test('reset and QR retrieval wait for a claim being saved, so an old request cannot restore a revoked key',async t=>{
+  const {remote,post}=await setup(t);await post('hello');
+  const code=await remote.qr('127.0.0.1','claim-before-reset'),oldVersion=remote.view().pairingVersion;
+  const key=new URLSearchParams(new URL(code.url).hash.slice(1)).get('k');
+  let entered,release;const began=new Promise(r=>entered=r),gate=new Promise(r=>release=r),save=remote.savePairing.bind(remote);let first=true;
+  remote.savePairing=async value=>{if(first){first=false;entered();await gate;}return save(value);};
+  const claiming=post('hello',{},{secret:key,as:'device-claiming'});await began;
+  const resetting=remote.resetPairing(),nextQr=remote.qr('127.0.0.1','qr-after-reset');release();
+  assert.equal((await claiming).status,200);await resetting;
+  const fresh=await nextQr;
+  assert.notEqual(fresh.pairingVersion,oldVersion);
+  assert.equal(fresh.pairingVersion,remote.view().pairingVersion);
+  const saved=JSON.parse(await fs.readFile(remote.file,'utf8'));
+  assert.equal(saved.secret,remote.pairing.secret);assert.equal(saved.device,null);
+  assert.equal((await post('hello',{},{secret:key,as:'device-claiming'})).status,403);
+  await assert.rejects(remote.qr('127.0.0.1','stale-qr-request',oldVersion),{code:'PHONE_QR_CHANGED'});
+  const newKey=new URLSearchParams(new URL(fresh.url).hash.slice(1)).get('k');
+  assert.equal((await post('hello',{},{secret:newKey,as:'device-after-reset'})).status,200);
+});
+
+test('a tab closing clears presence promptly while its already submitted model turn continues',async t=>{
+  const {remote,events,post,gateway}=await setup(t),stream=await events();await stream.next('overview');
+  await post('send',{threadId:'t-idle',text:'Keep running'});assert.equal(remote.phoneTurns.size,1);
+  stream.close();
+  for(let i=0;i<100&&remote.view().phoneConnected;i++)await new Promise(r=>setTimeout(r,5));
+  assert.equal(remote.view().phoneConnected,false);assert.equal(remote.phoneTurns.size,1);
+  assert(!gateway.seen.some(m=>m.method==='turn/interrupt'),'closing the tab never replays or cancels submitted work');
+});
+
+test('an SSE request authenticated just before reset cannot reopen a revoked stream afterwards',async t=>{
+  const {remote,events}=await setup(t);let entered,release;
+  const began=new Promise(r=>entered=r),gate=new Promise(r=>release=r),verify=remote.verify.bind(remote);
+  remote.verify=async(...args)=>{const result=await verify(...args);entered();await gate;return result;};
+  const connecting=events();await began;await remote.resetPairing();release();
+  const stream=await connecting;t.after(()=>stream.close());
+  assert.equal(stream.status,403);assert.equal(remote.stream,null);assert.equal(remote.view().phoneConnected,false);
+});
+
+test('stopping and starting the same server does not make a used signed request replayable',async t=>{
+  const {remote,post}=await setup(t),time=Date.now(),nonce='nonce-across-stop';
+  assert.equal((await post('hello',{},{time,nonce})).status,200);
+  await remote.stop();await remote.start();
+  assert.equal((await post('hello',{},{time,nonce})).status,401);
+});
 test('a phone whose browser lost its id re-pairs by scanning the code on screen, once per showing',async t=>{
   const {remote,post}=await setup(t);
-  remote.qr('127.0.0.1');
-  assert.equal((await post('hello')).status,200);
+  const keyOf=code=>new URLSearchParams(new URL(code.url).hash.slice(1)).get('k');
+  const first=keyOf(await remote.qr('127.0.0.1'));
+  assert.equal((await post('hello',{},{secret:first})).status,200);
   assert.equal(remote.view().claimOpen,false,'pairing uses up the shown code');
   // The tab was closed in a browser that keeps no data: same code, new id.
   assert.equal((await post('hello',{},{as:'device-cccccccc'})).status,409,'no code on screen: refused');
   assert.equal(remote.pairing.device,'device-aaaaaaaa');
-  remote.qr('127.0.0.1');assert.equal(remote.view().claimOpen,true);
-  assert.equal((await post('hello',{},{as:'device-cccccccc'})).status,200,'scanning the shown code takes over');
+  const fresh=keyOf(await remote.qr('127.0.0.1'));assert.equal(remote.view().claimOpen,true);
+  assert.equal((await post('hello',{},{secret:fresh,as:'device-cccccccc'})).status,200,'scanning the shown code takes over');
   assert.equal(remote.pairing.device,'device-cccccccc');
   assert.equal(JSON.parse(await fs.readFile(remote.file,'utf8')).device,'device-cccccccc');
   assert.equal((await post('hello',{},{as:'device-aaaaaaaa'})).status,409,'the old id cannot take it back without a new showing');
-  remote.qr('127.0.0.1');remote.now=()=>Date.now()+11*60*1000;
-  assert.equal((await post('hello',{},{as:'device-dddddddd',time:Date.now()+11*60*1000})).status,409,'a code shown long ago no longer re-pairs');
+  const expired=keyOf(await remote.qr('127.0.0.1'));remote.now=()=>Date.now()+11*60*1000;
+  assert.equal((await post('hello',{},{secret:expired,as:'device-dddddddd',time:Date.now()+11*60*1000})).status,410,'an expired QR is distinguished from a changed key');
 });
 test('the phone can call only the fixed command list, never raw Codex methods',async t=>{
   const {post,gateway}=await setup(t);

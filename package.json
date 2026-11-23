@@ -40,6 +40,7 @@
     "preview": "node scripts/preview.cjs",
     "smoke": "node scripts/smoke.cjs",
     "smoke:ui": "node scripts/run-electron.cjs scripts/electron-smoke.cjs",
+    "smoke:phone": "node scripts/run-electron.cjs scripts/phone-remote-smoke.cjs",
     "helper": "node scripts/build-helper.cjs",
     "smoke:gateway": "node scripts/gateway-smoke.cjs --live --inference",
     "smoke:recovery": "node scripts/recovery-native-smoke.cjs --live",

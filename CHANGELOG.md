@@ -4,6 +4,13 @@
 
 ### Fixed
 
+- Phone presence now expires after missed application heartbeats and disconnects
+  when the tab closes or goes into the background. Submitted model turns continue.
+- Fresh phone QR codes use a separate one-use pairing key. Pairing/reset operations
+  run in order, late QR responses are discarded, and old browser tabs cannot steal
+  the new scan or erase its credentials. Browsers without writable storage keep
+  the scanned key and device identity through reloads.
+
 - After explicitly quitting PADSwitcher or stopping its gateway, a newly opened
   VS Code Codex session can use native Codex with its original home, settings and
   sign-in. Quitting also removes the helper's manager launcher, so opening Codex

@@ -40,12 +40,20 @@ to IPv4 interfaces on a local port (47860–47869), accepts private-network and
 loopback peers, and is off at every app launch. Enable firewall access only for
 private networks; do not expose it with port forwarding or a public tunnel.
 
-The QR fragment contains a pairing secret. The computer keeps it in
-`data/phone/pairing.json` under the protected app-data directory; the phone stores
-it in browser localStorage. Treat both as credentials. API calls use HMAC with
-timestamps and nonces, and only one device is paired at a time. Showing the QR
-opens a ten-minute window for another device holding the secret to take over.
-Creating a new code revokes the previous secret and disconnects the old browser.
+Each fresh QR fragment contains a one-use pairing key, valid for ten minutes.
+Scanning it replaces the paired device and revokes its previous key. Existing
+paired requests cannot consume a newly shown QR. The computer keeps the accepted
+key in `data/phone/pairing.json` under the protected app-data directory; the phone
+stores its key and device identity together in browser localStorage. If storage
+is unavailable, the phone keeps them in the URL fragment so reloading still works.
+Treat the pairing file, QR and phone URL as credentials. API calls use HMAC with
+timestamps and nonces, and only one device is paired at a time. Creating a new code
+revokes the previous key and disconnects the old browser immediately.
+
+Connected status requires application heartbeats and expires within 45 seconds
+without a phone acknowledgement. Closing or hiding the phone tab also sends a
+best-effort disconnect scoped to that stream. An older tab cannot disconnect its
+replacement. Closing the phone page does not cancel a submitted model turn.
 
 Transport uses HTTP, without TLS. HMAC authenticates requests but does not encrypt
 session text, prompts, tool approvals or account/quota information in transit;

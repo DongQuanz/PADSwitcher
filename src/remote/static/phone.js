@@ -6,13 +6,14 @@
   const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
   const store = {
     get(k) { try { return localStorage.getItem(k); } catch { return null; } },
-    set(k, v) { try { localStorage.setItem(k, v); } catch {} },
+    set(k, v) { try { localStorage.setItem(k, v); return localStorage.getItem(k) === v; } catch { return false; } },
     del(k) { try { localStorage.removeItem(k); } catch {} },
   };
   const random = n => Array.from(crypto.getRandomValues(new Uint8Array(n)), b => b.toString(16).padStart(2, '0')).join('');
   const isClaude = id => String(id || '').startsWith('claude:');
   const TITLES = { sessions:'Session', quota:'Quota', kaggle:'Kaggle' };
   let secret = null, device = null, events = null, retry = 0, retryTimer = null;
+  let authEpoch = 0, connectionId = null, connectionWatch = null, paused = false, superseded = false, startingEpoch = null;
   let overview = null, threads = [], threadCursor = null, search = '', tab = 'sessions';
   let provider = store.get('pad-provider') || 'all';
   let view = null;          // the open session: {id, thread, nextCursor}
@@ -21,76 +22,133 @@
   const buffers = new Map();
 
   // ---------- pairing ----------
-  const hash = new URLSearchParams(location.hash.slice(1));
-  if (hash.get('k')) {
-    const k = hash.get('k');
-    // Keep this phone's id when its code was only erased, so the computer still knows it.
-    const stored = store.get('pad-secret');
-    if (stored && k !== stored) store.del('pad-device');
-    store.set('pad-secret', k); secret = k;
-    history.replaceState(null, '', location.pathname);
+  const validId = value => /^[A-Za-z0-9_-]{8,64}$/.test(String(value || ''));
+  function storedPairing() {
+    try { const p = JSON.parse(store.get('pad-pairing')); if (typeof p?.secret === 'string' && validId(p.device)) return p; } catch {}
+    const key = store.get('pad-secret'), id = store.get('pad-device');
+    return key ? { secret:key, device:validId(id) ? id : random(16) } : null;
   }
-  secret = store.get('pad-secret') || secret;
-  device = store.get('pad-device');
-  if (!device) { device = random(16); store.set('pad-device', device); }
-  // Another tab scanned a new code: this tab switches to it instead of failing on the old one.
-  window.addEventListener('storage', e => { if (e.key === 'pad-secret' && e.newValue && e.newValue !== secret) location.reload(); });
+  function savePairing() {
+    if (!secret) return false;
+    const saved = store.set('pad-pairing', JSON.stringify({ secret, device }));
+    if (saved) { store.del('pad-secret'); store.del('pad-device'); }
+    return saved;
+  }
+  function adoptPairing() {
+    const hash = new URLSearchParams(location.hash.slice(1)), scanned = hash.get('k'), saved = storedPairing();
+    const previous = secret, previousDevice = device;
+    // The scanned key always wins, even if storage is full or unavailable.
+    secret = scanned || saved?.secret || null;
+    device = scanned && scanned === previous ? previousDevice : scanned && scanned === saved?.secret ? saved.device : scanned && validId(hash.get('d')) ? hash.get('d') : !scanned && saved ? saved.device : random(16);
+    authEpoch++; paused = false; superseded = false;
+    const persisted = savePairing();
+    if (secret && !persisted) {
+      // Keep enough state to reload in a browser that refuses localStorage writes.
+      const fragment = new URLSearchParams({ k:secret, d:device });
+      history.replaceState(null, '', location.pathname + location.search + '#' + fragment);
+    }
+  }
+  adoptPairing();
+  window.addEventListener('hashchange', () => {
+    if (!new URLSearchParams(location.hash.slice(1)).get('k')) return;
+    stopTransport(true); adoptPairing(); view = null; approvals.clear(); buffers.clear(); start();
+  });
+  window.addEventListener('storage', e => {
+    if (e.key !== 'pad-pairing' || !e.newValue) return;
+    const next = storedPairing();
+    if (!next || next.secret === secret && next.device === device) return;
+    stopTransport(true); authEpoch++; paused = true; superseded = true;
+    showPair('Kết nối đã chuyển sang tab vừa quét mã. Tải lại trang này nếu muốn dùng tab này.');
+  });
 
   // ---------- transport ----------
-  class RemoteError extends Error { constructor(message, status, code) { super(message); this.status = status; this.code = code; } }
-  async function call(cmd, args = {}) {
+  class RemoteError extends Error { constructor(message, status, code, epoch = authEpoch) { super(message); this.status = status; this.code = code; this.epoch = epoch; } }
+  async function call(cmd, args = {}, options = {}) {
     if (!secret) throw new RemoteError('Chưa ghép nối.', 403);
+    const epoch = authEpoch, key = secret;
     const body = JSON.stringify({ cmd, args, d: device, t: Date.now(), n: random(12) });
-    let response;
+    const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 12000);
+    let response, data = {};
     try {
-      response = await fetch('/api/call', { method:'POST', headers:{ 'Content-Type':'application/json', 'X-Pad-Signature': padHmac.hmac(secret, 'POST\n/api/call\n' + body) }, body, cache:'no-store' });
-    } catch { throw new RemoteError('Không kết nối được máy tính. Kiểm tra Wi-Fi và PADSwitcher.', 0); }
-    let data = {}; try { data = await response.json(); } catch {}
+      response = await fetch('/api/call', { method:'POST', headers:{ 'Content-Type':'application/json', 'X-Pad-Signature': padHmac.hmac(key, 'POST\n/api/call\n' + body) }, body, cache:'no-store', signal:controller.signal, keepalive:options.keepalive === true });
+      try { data = await response.json(); } catch {}
+    } catch { throw new RemoteError('Không kết nối được máy tính. Kiểm tra Wi-Fi và PADSwitcher.', 0, null, epoch); }
+    finally { clearTimeout(timeout); }
+    if (epoch !== authEpoch) throw new RemoteError('Yêu cầu cũ đã được bỏ qua.', 0, 'OBSOLETE', epoch);
     if (!response.ok) throw new RemoteError(data.error || 'Máy tính từ chối yêu cầu.', response.status);
     if (!data.ok) throw new RemoteError(data.error || 'Thao tác chưa thực hiện được.', 200, data.code);
     return data.result;
   }
   // A tab left open with an old code must not erase the code another tab has just scanned.
-  function forgetSecret() { if (store.get('pad-secret') === secret) store.del('pad-secret'); secret = null; }
+  function forgetSecret() {
+    const saved = storedPairing();
+    if (saved?.secret === secret && saved.device === device) store.del('pad-pairing');
+    if (store.get('pad-secret') === secret) store.del('pad-secret');
+    secret = null; authEpoch++; paused = true;
+  }
   function authFailure(error) {
+    if (error.code === 'OBSOLETE' || error.epoch != null && error.epoch !== authEpoch) return true;
     if (error.status === 403) { forgetSecret(); showPair('Mã kết nối đã đổi. Quét lại mã QR mới trên PADSwitcher.'); return true; }
-    if (error.status === 409) { showPair(error.message); return true; }
+    if (error.status === 409 || error.status === 410) { paused = true; showPair(error.message); return true; }
     return false;
   }
+  function stopTransport(notify = false) {
+    const id = connectionId; connectionId = null;
+    const source = events; events = null; source?.close();
+    clearTimeout(retryTimer); clearInterval(connectionWatch); connectionWatch = null;
+    if (notify && id && secret) call('disconnect', { connectionId:id }, { keepalive:true }).catch(() => {});
+  }
   function connectEvents() {
-    clearTimeout(retryTimer); events?.close();
-    const t = Date.now(), n = random(12), s = padHmac.hmac(secret, ['GET', '/api/events', device, t, n].join('\n'));
-    const source = events = new EventSource(`/api/events?d=${encodeURIComponent(device)}&t=${t}&n=${n}&s=${s}`);
-    source.onopen = () => { retry = 0; setLink('ready'); };
-    source.onerror = () => { source.close(); if (events === source) { events = null; setLink('waiting', 'Đang kết nối lại'); scheduleReconnect(); } };
-    source.addEventListener('overview', e => { overview = JSON.parse(e.data); setLink('ready'); renderQuota(); renderKaggle(); renderNotices(); });
-    source.addEventListener('approval', e => {
+    if (paused || superseded || !secret) return;
+    stopTransport();
+    const epoch = authEpoch, id = connectionId = random(16);
+    const t = Date.now(), n = random(12), s = padHmac.hmac(secret, ['GET', '/api/events', device, t, n, id].join('\n'));
+    const source = events = new EventSource(`/api/events?d=${encodeURIComponent(device)}&t=${t}&n=${n}&s=${s}&c=${id}`);
+    let lastEvent = Date.now();
+    const guard = fn => e => { if (events !== source || epoch !== authEpoch || paused || superseded) return; lastEvent = Date.now(); fn(e); };
+    const reconnect = () => { stopTransport(); setLink('waiting', 'Đang kết nối lại'); scheduleReconnect(); };
+    const on = (name, fn) => source.addEventListener(name, guard(fn));
+    source.onopen = guard(() => { retry = 0; setLink('ready'); });
+    source.onerror = guard(reconnect);
+    connectionWatch = setInterval(() => { if (events === source && Date.now() - lastEvent >= 45000) reconnect(); }, 15000);
+    on('heartbeat', e => {
+      if (JSON.parse(e.data).connectionId !== id) return;
+      call('heartbeat', { connectionId:id }).then(r => { if (events === source && !r.connected) reconnect(); }).catch(error => {
+        if (!authFailure(error) && events === source) reconnect();
+      });
+    });
+    on('overview', e => { overview = JSON.parse(e.data); setLink('ready'); renderQuota(); renderKaggle(); renderNotices(); });
+    on('approval', e => {
       const a = JSON.parse(e.data), known = approvals.has(a.id); approvals.set(a.id, a); renderApprovals();
       if (!known && a.answerable) { navigator.vibrate?.(200); toast((a.provider === 'claude' ? 'Claude' : 'Codex') + ' cần bạn duyệt một thao tác.'); }
     });
-    source.addEventListener('approvalResolved', e => { approvals.delete(JSON.parse(e.data).id); renderApprovals(); });
-    source.addEventListener('live', e => onLive(JSON.parse(e.data)));
-    source.addEventListener('kaggle', e => {
+    on('approvalResolved', e => { approvals.delete(JSON.parse(e.data).id); renderApprovals(); });
+    on('live', e => onLive(JSON.parse(e.data)));
+    on('kaggle', e => {
       const k = JSON.parse(e.data), ok = k.status === 'complete';
       navigator.vibrate?.(ok ? 120 : [120, 80, 120]);
       toast(`Kaggle: ${k.title} ${ok ? 'đã chạy xong' : k.status === 'error' ? 'bị lỗi' : 'đã dừng'}.`, !ok);
       if (tab !== 'kaggle') $('#kaggle-badge').classList.remove('hidden');
     });
-    source.addEventListener('kicked', () => { source.close(); events = null; forgetSecret(); showPair('Máy tính đã tạo mã mới. Quét lại mã QR để tiếp tục.'); });
+    on('kicked', () => { stopTransport(); forgetSecret(); showPair('Máy tính đã đổi kết nối. Quét lại mã QR mới để tiếp tục.'); });
+    on('replaced', () => { stopTransport(); authEpoch++; paused = true; superseded = true; showPair('Kết nối đã chuyển sang tab khác. Tải lại trang này nếu muốn dùng tab này.'); });
   }
   function scheduleReconnect() {
     clearTimeout(retryTimer);
+    if (!secret || paused || superseded || document.visibilityState === 'hidden') return;
+    const epoch = authEpoch;
     const wait = Math.min(15000, 1000 * 2 ** retry++);
     retryTimer = setTimeout(async () => {
-      try { await call('hello'); connectEvents(); if (view) openThread(view.id, true); else loadThreads(); }
+      try { await call('hello'); if (epoch !== authEpoch || paused || superseded) return; connectEvents(); if (view) openThread(view.id, true); else loadThreads(); }
       catch (error) { if (!authFailure(error)) { setLink('', error.status === 0 ? 'Mất kết nối' : error.message); scheduleReconnect(); } }
     }, wait);
   }
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState !== 'visible' || !secret) return;
-    if (!events || events.readyState === EventSource.CLOSED) { retry = 0; scheduleReconnect(); }
-    else if (view) openThread(view.id, true);
+    if (document.visibilityState !== 'visible') { paused = true; stopTransport(true); setLink('waiting', 'Trang đang ẩn'); return; }
+    if (secret && !superseded && (paused || !events)) { paused = false; retry = 0; start(); }
   });
+  window.addEventListener('pagehide', () => { paused = true; stopTransport(true); });
+  window.addEventListener('pageshow', e => { if ((e.persisted || paused) && secret && !superseded && document.visibilityState === 'visible') { paused = false; retry = 0; start(); } });
 
   // ---------- helpers ----------
   function setLink(state, text) {
@@ -152,7 +210,7 @@
 
   // ---------- screens ----------
   function showPair(message) {
-    events?.close(); events = null; clearTimeout(retryTimer);
+    stopTransport();
     for (const id of ['#sessions-screen', '#quota-screen', '#kaggle-screen', '#thread-screen', '#new-screen', '#tabs']) $(id).classList.add('hidden');
     $('#pair-screen').classList.remove('hidden'); $('#page-title').textContent = 'Ghép nối';
     if (message) $('#pair-message').textContent = message;
@@ -495,11 +553,18 @@
 
   // ---------- start ----------
   async function start() {
+    if (startingEpoch === authEpoch || paused || superseded) return;
     if (!secret) { showPair(); return; }
+    const epoch = authEpoch; startingEpoch = epoch;
     setLink('waiting');
     document.querySelectorAll('.chip').forEach(c => c.classList.toggle('active', c.dataset.provider === provider));
-    try { await call('hello'); showTab('sessions'); connectEvents(); loadThreads(); }
+    try {
+      await call('hello'); if (epoch !== authEpoch || paused || superseded) return;
+      if (savePairing()) history.replaceState(null, '', location.pathname + location.search);
+      showTab('sessions'); connectEvents(); loadThreads();
+    }
     catch (error) { if (!authFailure(error)) { showTab('sessions'); $('#thread-list').innerHTML = `<li class="empty">${esc(error.message)}</li>`; setLink('', 'Mất kết nối'); scheduleReconnect(); } }
+    finally { if (startingEpoch === epoch) startingEpoch = null; }
   }
   start();
 })();

@@ -448,11 +448,15 @@ $('#desktop-home-pick').onclick=async()=>{const r=await call('pick',{kind:'deskt
 
 // Phone remote. The QR code holds the pairing secret, so it is fetched on demand and
 // hidden again once a phone is paired; the app state only says whether one is.
-let phoneQrKey=null,phoneIp=null,phoneQrShown=false,phoneQrFlight=null,phoneWasConnected=false,phoneQrTimer=null;
+let phoneQrKey=null,phoneIp=null,phoneQrShown=false,phoneQrFlight=null,phoneQrTimer=null,phoneQrRequestId=null,phoneQrEpoch=null,phoneQrSequence=0,phoneResetting=false;
+function clearPhoneQr(){phoneQrSequence++;phoneQrKey=null;$('#phone-qr-img').removeAttribute('src');}
 // A shown code can re-pair a phone for 10 minutes; hide it once a phone is in, or after that.
-function showPhoneQr(){phoneQrShown=true;phoneQrKey=null;clearTimeout(phoneQrTimer);phoneQrTimer=setTimeout(()=>{phoneQrShown=false;if(state)render();},10*60*1000);}
+function showPhoneQr(){clearPhoneQr();phoneQrShown=true;phoneQrRequestId=crypto.randomUUID();clearTimeout(phoneQrTimer);phoneQrTimer=setTimeout(()=>{phoneQrShown=false;clearPhoneQr();if(state)render();},10*60*1000);}
 function renderPhone(){
   const p=state.phone||{status:'stopped'},on=p.status==='ready',g=state.gateway||{};
+  const epoch=p.pairingVersion||String(p.port||'');
+  if(!on){if(phoneQrEpoch!==null||phoneQrShown)clearPhoneQr();phoneQrEpoch=null;phoneQrShown=false;phoneQrRequestId=null;clearTimeout(phoneQrTimer);}
+  else if(epoch!==phoneQrEpoch){clearPhoneQr();phoneQrEpoch=epoch;phoneIp=p.ips?.includes(phoneIp)?phoneIp:p.ips?.[0]||null;phoneQrShown=false;clearTimeout(phoneQrTimer);if(!p.paired&&!phoneResetting)showPhoneQr();}
   $('#phone-state').textContent=p.status==='starting'?'Đang bật…':p.status==='error'?'Chưa bật được':!on?'Đang tắt':p.phoneConnected?'Điện thoại đang kết nối':p.paired?'Đã ghép nối · chờ điện thoại':'Chờ quét mã';
   $('#phone-state').className=on&&p.phoneConnected?'status-good':'status-waiting';
   $('#phone-address').textContent=on&&phoneIp?'http://'+phoneIp+':'+p.port:'—';
@@ -469,37 +473,44 @@ function renderPhone(){
   $('#phone-claude-toggle').disabled=!['installed','missing'].includes(claude);
   mark('#phone-claude-toggle',isRunning('claudeStatusLine'));
   mark('#phone-toggle',isRunning('phoneStart')||isRunning('phoneStop'));mark('#phone-reset',isRunning('phoneReset'));
-  if(p.phoneConnected&&!phoneWasConnected&&p.paired){phoneQrShown=false;clearTimeout(phoneQrTimer);}
-  phoneWasConnected=!!p.phoneConnected;
-  const showQr=on&&(!p.paired||phoneQrShown);
+  const showQr=on&&phoneQrShown&&!phoneResetting;
   $('#phone-qr').classList.toggle('hidden',!on);
-  $('#phone-qr-img').classList.toggle('hidden',!showQr);
+  $('#phone-qr-img').classList.toggle('hidden',!showQr||!$('#phone-qr-img').hasAttribute('src'));
   $('#phone-ip').classList.toggle('hidden',!showQr||$('#phone-ip').options.length<2);
   $('#phone-qr-show').classList.toggle('hidden',showQr);
-  $('#phone-qr-note').textContent=showQr?'Quét bằng camera điện thoại':'Đã ghép nối. Mã QR được ẩn để người khác không quét được. Điện thoại mất kết nối thì bấm Hiện mã QR rồi quét lại.';
-  if(!on){phoneQrKey=null;phoneQrShown=false;return;}
-  const key=p.port+'|'+(phoneIp||'');
-  if(showQr&&key!==phoneQrKey&&!phoneQrFlight)loadPhoneQr(key);
+  $('#phone-qr-show').disabled=phoneResetting;
+  $('#phone-qr-note').textContent=showQr?$('#phone-qr-img').hasAttribute('src')?'Quét bằng camera điện thoại':'Đang tạo mã QR…':p.paired?'Đã ghép nối. Mã QR được ẩn để người khác không quét được. Điện thoại mất kết nối thì bấm Hiện mã QR rồi quét lại.':'Bấm Hiện mã QR để kết nối điện thoại.';
+  if(!on)return;
+  const key=epoch+'|'+phoneQrRequestId+'|'+(phoneIp||'');
+  if(showQr&&key!==phoneQrKey&&phoneQrFlight?.key!==key)loadPhoneQr(key);
 }
 async function loadPhoneQr(key){
   phoneQrKey=key;
-  phoneQrFlight=api.action('phoneQR',{ip:phoneIp,locale:ui.language}).then(response=>{
-    // Keep the failed key: retrying on every render would loop. A new port, address or
-    // the Show button asks again.
-    if(!response.ok){toast(ui.error(response.error),true);return;}
-    const q=response.result;phoneIp=q.ip;phoneQrKey=state.phone.port+'|'+q.ip;
+  const sequence=phoneQrSequence,epoch=phoneQrEpoch,requestId=phoneQrRequestId,flight={key};phoneQrFlight=flight;
+  const current=()=>sequence===phoneQrSequence&&epoch===phoneQrEpoch&&requestId===phoneQrRequestId&&state.phone?.status==='ready'&&!phoneResetting&&phoneQrShown;
+  flight.promise=api.action('phoneQR',{ip:phoneIp,requestId,pairingVersion:state.phone?.pairingVersion,locale:ui.language}).then(response=>{
+    if(!current())return;
+    if(!response.ok){phoneQrShown=false;clearPhoneQr();toast(ui.error(response.error),true);return;}
+    const q=response.result;
+    if(q.pairingVersion&&q.pairingVersion!==state.phone?.pairingVersion)return;
+    phoneIp=q.ip;phoneQrKey=epoch+'|'+requestId+'|'+q.ip;
     $('#phone-qr-img').src='data:image/svg+xml;charset=utf-8,'+encodeURIComponent(q.svg);
     const select=$('#phone-ip');select.innerHTML=q.ips.map(ip=>'<option'+(ip===q.ip?' selected':'')+'>'+e(ip)+'</option>').join('');
-  }).catch(()=>{}).finally(()=>{phoneQrFlight=null;if(state)render();});
+  }).catch(()=>{if(current()){phoneQrShown=false;clearPhoneQr();}}).finally(()=>{if(phoneQrFlight===flight)phoneQrFlight=null;if(state)render();});
+  return flight.promise;
 }
-$('#phone-ip').onchange=event=>{phoneIp=event.target.value;phoneQrKey=null;render();};
+$('#phone-ip').onchange=event=>{phoneIp=event.target.value;clearPhoneQr();render();};
 $('#phone-qr-show').onclick=()=>{showPhoneQr();render();};
 $('#phone-toggle').onclick=async()=>{
   const on=['ready','starting'].includes(state.phone?.status);
   if(on){await call('phoneStop');return;}
   if(await call('phoneStart'))toast(state.phone?.paired?'Đã bật. Mở lại trang PADSwitcher trên điện thoại đã ghép nối.':'Đã bật. Quét mã QR bằng camera điện thoại.');
 };
-$('#phone-reset').onclick=()=>showModal('Tạo mã kết nối mới?','<p>Điện thoại đang ghép nối sẽ bị ngắt và phải quét mã mới. Dùng khi đổi điện thoại hoặc nghi mã đã bị lộ.</p>',async()=>{closeModal();showPhoneQr();await call('phoneReset',{},'Đã tạo mã mới. Quét lại bằng điện thoại.');},'Tạo mã mới');
+$('#phone-reset').onclick=()=>showModal('Tạo mã kết nối mới?','<p>Điện thoại đang ghép nối sẽ bị ngắt và phải quét mã mới. Dùng khi đổi điện thoại hoặc nghi mã đã bị lộ.</p>',async()=>{
+  closeModal();phoneResetting=true;phoneQrShown=false;clearPhoneQr();render();
+  try{const response=await call('phoneReset',{},'Đã tạo mã mới. Quét lại bằng điện thoại.');phoneResetting=false;if(response)showPhoneQr();}
+  finally{phoneResetting=false;render();}
+},'Tạo mã mới');
 
 $('#phone-claude-toggle').onclick=()=>{
   const on=state.phone?.claudeStatusLine==='installed';

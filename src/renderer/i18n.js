@@ -5,6 +5,9 @@ window.padUI = (() => {
   let theme = localStorage.getItem('pad-theme') || 'light';
   if (!['light','dark'].includes(theme)) theme = 'light';
   const dictionary = {
+    "Đang tạo mã QR…":"Creating QR code…",
+    "Bấm Hiện mã QR để kết nối điện thoại.":"Click Show QR code to connect a phone.",
+    "Mã kết nối vừa thay đổi. Hiện mã QR lại.":"The connection code changed. Show the QR code again.",
     "Quota Claude":"Claude quota",
     "Chưa bật":"Off",
     "Bật quota Claude":"Turn on Claude quota",

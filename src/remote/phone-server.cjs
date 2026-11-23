@@ -1,7 +1,7 @@
 'use strict';
-// Phone remote over the local network: the QR code
-// carries a secret, one phone is bound to it, and "new code" revokes that phone.
-// Differences: the secret never travels after the scan (every request is HMAC-signed
+// Phone remote over the local network: each QR issues a one-use pairing key.
+// Scanning it revokes the previous phone; showing it alone preserves that phone.
+// The secret never travels after the scan (every request is HMAC-signed
 // with a timestamp and nonce), only private-network peers are served, and the phone
 // can call a fixed list of commands instead of raw Codex JSON-RPC.
 const {EventEmitter}=require('node:events');
@@ -14,6 +14,7 @@ const fs=require('node:fs/promises');
 const crypto=require('node:crypto');
 const {atomicWrite,assertDirectory}=require('../core/files.cjs');
 const {UserError,publicError}=require('../core/errors.cjs');
+const {KeyedLock}=require('../core/locks.cjs');
 const {CodexBridge}=require('./codex-bridge.cjs');
 const {ClaudeBridge,isClaude}=require('./claude-bridge.cjs');
 const {ClaudeUsage}=require('./claude-usage.cjs');
@@ -28,6 +29,8 @@ const CLOCK_SKEW=5*60*1000;
 const IDLE_STOP=30*60*1000;
 // How long a QR code shown on the computer may move control to a phone the computer does not know.
 const CLAIM_WINDOW=10*60*1000;
+const HEARTBEAT_INTERVAL=15000;
+const PHONE_LEASE=45000;
 const STATIC_DIR=path.join(__dirname,'static');
 const FONT_DIR=path.join(__dirname,'..','assets','fonts');
 const STATIC={
@@ -78,6 +81,7 @@ class PhoneRemote extends EventEmitter{
     this.service=service;this.gateway=gateway;this.actions=actions;this.version=version;this.preferredPort=port;this.now=now;this.addresses=addresses;
     this.status='stopped';this.error=null;this.server=null;this.port=null;this.ips=[];this.pairing=null;
     this.stream=null;this.lastSeen=0;this.claimUntil=0;this.nonces=new Map();this.failures=new Map();this.folderCache=null;this.phoneTurns=new Set();
+    this.control=new KeyedLock();this.claim=null;this.pairingVersion=crypto.randomUUID();
     this.bridge=new CodexBridge(gateway,{version});
     this.bridge.on('notification',(m,p)=>this.forward(m,p));
     this.bridge.on('request',r=>this.push('approval',simplifyRequest(r)));
@@ -94,7 +98,7 @@ class PhoneRemote extends EventEmitter{
     this.kaggleStates=new Map();
     this.onChange=()=>{this.watchKaggle();this.scheduleOverview();};
   }
-  view(){return {status:this.status,port:this.port,ips:[...this.ips],paired:!!this.pairing?.device,phoneConnected:!!this.stream,claimOpen:this.now()<this.claimUntil,lastSeen:this.lastSeen?new Date(this.lastSeen).toISOString():null,activeTurns:this.phoneTurns.size+this.claude.active,claudeStatusLine:this.claudeUsage.setup,error:this.error};}
+  view(){return {status:this.status,port:this.port,ips:[...this.ips],paired:!!this.pairing?.device,phoneConnected:!!this.stream&&this.now()-this.stream.lastAck<PHONE_LEASE,pairingVersion:this.pairingVersion,claimOpen:this.now()<this.claimUntil,lastSeen:this.lastSeen?new Date(this.lastSeen).toISOString():null,activeTurns:this.phoneTurns.size+this.claude.active,claudeStatusLine:this.claudeUsage.setup,error:this.error};}
   changed(){this.emit('change');this.service?.changed?.();}
   async loadPairing(){
     await fs.mkdir(this.root,{recursive:true});await assertDirectory(this.root);
@@ -105,12 +109,14 @@ class PhoneRemote extends EventEmitter{
     }catch(e){if(e.code!=='ENOENT'&&!(e instanceof SyntaxError))throw e;}
     return this.pairing={version:1,secret:crypto.randomBytes(32).toString('base64url'),device:null,port:null};
   }
-  async savePairing(){await atomicWrite(this.file,JSON.stringify(this.pairing));}
-  async start(){
+  async savePairing(value=this.pairing){await atomicWrite(this.file,JSON.stringify(value));}
+  start(){return this.control.run(null,()=>this.startLocked());}
+  async startLocked(){
     if(['ready','starting'].includes(this.status))return this.view();
     this.status='starting';this.error=null;this.changed();
     try{
       await this.loadPairing();
+      this.claim=null;this.claimUntil=0;this.failures.clear();this.pairingVersion=crypto.randomUUID();
       this.ips=await this.addresses();
       if(!this.ips.length)throw new UserError('Máy tính chưa kết nối mạng nội bộ (Wi-Fi/LAN). Kết nối Wi-Fi rồi bật lại.','PHONE_NO_NETWORK');
       const server=http.createServer((req,res)=>this.handle(req,res).catch(()=>{try{this.reply(res,500,{error:'Lỗi máy chủ.'});}catch{}}));
@@ -133,6 +139,7 @@ class PhoneRemote extends EventEmitter{
   }
   idle(){
     if(this.status!=='ready')return;
+    this.expireStream();
     // A phone turn is still running: closing would make the gateway interrupt it.
     if(!this.stream&&!this.phoneTurns.size&&!this.claude.active&&this.now()-this.lastSeen>=IDLE_STOP)this.stop().catch(()=>{});
   }
@@ -141,25 +148,33 @@ class PhoneRemote extends EventEmitter{
     this.service?.off?.('change',this.onChange);
     this.endStream();
     if(this.server){const server=this.server;this.server=null;server.closeAllConnections?.();await new Promise(r=>server.close(()=>r()));}
-    this.bridge.close();this.claude.closeAll();this.port=null;this.claimUntil=0;
+    this.bridge.close();this.claude.closeAll();this.port=null;this.claimUntil=0;this.claim=null;
   }
-  async stop(force=false){
+  stop(force=false){return this.control.run(null,()=>this.stopLocked(force));}
+  async stopLocked(force){
     if((this.phoneTurns.size||this.claude.active)&&!force)throw new UserError('Lượt Codex do điện thoại gửi vẫn đang chạy. Chờ hoàn tất hoặc dừng lượt đó trước.','PHONE_ACTIVE_TURN');
     await this.closeServer();this.status='stopped';this.error=null;this.changed();
   }
-  async resetPairing(){
+  resetPairing(){return this.control.run(null,()=>this.resetPairingLocked());}
+  async resetPairingLocked(){
     if(!this.pairing)await this.loadPairing();
-    this.pairing={...this.pairing,secret:crypto.randomBytes(32).toString('base64url'),device:null};
-    await this.savePairing();this.nonces.clear();
+    const next={...this.pairing,secret:crypto.randomBytes(32).toString('base64url'),device:null};
+    await this.savePairing(next);this.pairing=next;this.nonces.clear();this.failures.clear();
+    this.claim=null;this.claimUntil=0;this.pairingVersion=crypto.randomUUID();
     this.push('kicked',{});this.endStream();this.changed();
   }
-  phoneUrl(ip){return `http://${ip}:${this.port}/#k=${this.pairing.secret}`;}
-  qr(ip){
+  phoneUrl(ip,claim){return `http://${ip}:${this.port}/?pair=${claim.id}#k=${claim.secret}`;}
+  qr(ip,requestId,pairingVersion){return this.control.run(null,()=>this.qrLocked(ip,requestId,pairingVersion));}
+  qrLocked(ip,requestId,pairingVersion){
     if(this.status!=='ready')throw new UserError('Bật kết nối điện thoại trước.','PHONE_STOPPED');
-    const address=this.ips.includes(ip)?ip:this.ips[0];const url=this.phoneUrl(address);
-    // The code on the computer's screen is the user's consent to (re)pair the phone that scans it.
-    this.claimUntil=this.now()+CLAIM_WINDOW;
-    return {ip:address,ips:[...this.ips],url,svg:qr.toSvg(qr.encode(url))};
+    if(pairingVersion&&pairingVersion!==this.pairingVersion)throw new UserError('Mã kết nối vừa thay đổi. Hiện mã QR lại.','PHONE_QR_CHANGED');
+    const id=ID.test(String(requestId||''))?requestId:crypto.randomBytes(12).toString('base64url');
+    if(!this.claim||this.claim.id!==id||this.claim.expires<=this.now()){
+      this.claim={id,secret:crypto.randomBytes(32).toString('base64url'),expires:this.now()+CLAIM_WINDOW};
+      this.claimUntil=this.claim.expires;this.failures.clear();
+    }
+    const address=this.ips.includes(ip)?ip:this.ips[0],url=this.phoneUrl(address,this.claim);
+    return {ip:address,ips:[...this.ips],url,svg:qr.toSvg(qr.encode(url)),pairingVersion:this.pairingVersion};
   }
   // ---------- HTTP ----------
   reply(res,code,body,type='application/json; charset=utf-8',extra={}){
@@ -191,42 +206,71 @@ class PhoneRemote extends EventEmitter{
     return this.reply(res,404,{error:'Không có trang này.'});
   }
   // Returns an error [status, message] or null, and binds the first phone.
-  async verify(device,time,nonce,signature,message){
+  verify(device,time,nonce,signature,message){return this.control.run(null,()=>this.verifyLocked(device,time,nonce,signature,message));}
+  async verifyLocked(device,time,nonce,signature,message){
+    if(this.status!=='ready')return [503,'Kết nối điện thoại đang tắt.'];
     if(!this.pairing||!ID.test(String(device))||!ID.test(String(nonce))||!Number.isFinite(time)||!/^[0-9a-f]{64}$/.test(String(signature)))return [400,'Yêu cầu không hợp lệ.'];
-    if(!safeEqual(signature,sign(this.pairing.secret,message)))return [403,'Mã kết nối đã đổi hoặc không đúng. Quét lại mã QR trên PADSwitcher.'];
+    const current=safeEqual(signature,sign(this.pairing.secret,message));
+    const claim=this.claim&&safeEqual(signature,sign(this.claim.secret,message))?this.claim:null;
+    if(!current&&!claim)return [403,'Mã kết nối đã đổi hoặc không đúng. Quét lại mã QR trên PADSwitcher.'];
     const now=this.now();
+    if(claim&&claim.expires<=now)return [410,'Mã QR đã hết hạn. Trên PADSwitcher, bấm “Hiện mã QR” rồi quét lại.'];
     if(Math.abs(now-time)>CLOCK_SKEW)return [401,'Giờ trên điện thoại lệch quá nhiều so với máy tính. Bật giờ tự động rồi thử lại.'];
     for(const [n,expires]of this.nonces)if(expires<=now)this.nonces.delete(n);
     if(this.nonces.has(nonce))return [401,'Yêu cầu đã được gửi trước đó.'];
     if(this.nonces.size>=5000)this.nonces.delete(this.nonces.keys().next().value);
     this.nonces.set(nonce,now+2*CLOCK_SKEW);
-    if(this.pairing.device!==device){
-      // A phone the computer does not know: the first one, or one whose browser erased its id
-      // when the tab closed (private tabs, in-app browsers). It takes over only while the QR
-      // code is on the computer's screen, once per showing.
-      if(this.pairing.device!==null&&this.now()>=this.claimUntil)return [409,'Điện thoại này chưa được ghép nối (trình duyệt có thể đã xoá dữ liệu khi đóng tab). Trên PADSwitcher, bấm “Hiện mã QR” rồi quét lại.'];
-      if(this.pairing.device!==null)this.endStream();
-      this.pairing.device=device;this.claimUntil=0;await this.savePairing();this.changed();
+    if(claim||this.pairing.device!==device){
+      if(!claim&&this.pairing.device!==null)return [409,'Mã QR này đã được dùng cho một trình duyệt khác. Trên PADSwitcher, bấm “Hiện mã QR” để lấy mã mới.'];
+      const next={...this.pairing,secret:claim?claim.secret:this.pairing.secret,device};
+      await this.savePairing(next);
+      this.push('kicked',{});this.endStream();this.pairing=next;
+      this.claim=null;this.claimUntil=0;this.pairingVersion=crypto.randomUUID();this.changed();
     }
     this.lastSeen=now;
     return null;
   }
   async events(req,res,url,ip){
-    const q=url.searchParams,d=q.get('d'),t=Number(q.get('t')),n=q.get('n'),s=q.get('s');
-    const error=await this.verify(d,t,n,s,['GET','/api/events',d,t,n].join('\n'));
+    const q=url.searchParams,d=q.get('d'),t=Number(q.get('t')),n=q.get('n'),s=q.get('s'),id=q.get('c');
+    if(!ID.test(String(id||'')))return this.reply(res,400,{error:'Tải lại trang điện thoại rồi quét mã QR mới.'});
+    const message=['GET','/api/events',d,t,n,id].join('\n');
+    const error=await this.verify(d,t,n,s,message);
     if(error){if(error[0]===403)this.fail(ip);return this.reply(res,error[0],{error:error[1]});}
+    if(this.pairing?.device!==d||!safeEqual(s,sign(this.pairing.secret,message)))return this.reply(res,403,{error:'Mã kết nối đã đổi. Quét lại mã QR mới.'});
+    this.push('replaced',{});
     this.endStream();
     res.writeHead(200,{...SECURITY_HEADERS,'Content-Type':'text/event-stream; charset=utf-8','Connection':'keep-alive'});
-    const stream={res,ping:setInterval(()=>{try{res.write(': ping\n\n');}catch{}},15000)};
-    this.stream=stream;this.changed();
-    req.on('close',()=>{clearInterval(stream.ping);if(this.stream===stream){this.stream=null;this.lastSeen=this.now();this.changed();}});
+    const stream={res,id,device:d,lastAck:this.now()};
+    stream.ping=setInterval(()=>{if(!this.expireStream()&&this.stream===stream)this.push('heartbeat',{connectionId:id});},HEARTBEAT_INTERVAL);stream.ping.unref?.();
+    this.stream=stream;this.renewStream(stream);this.changed();
+    res.on('close',()=>{clearInterval(stream.ping);clearTimeout(stream.lease);if(this.stream===stream){this.stream=null;this.changed();}});
+    res.on('error',()=>{if(this.stream===stream){this.endStream();this.changed();}});
+    res.flushHeaders?.();this.push('heartbeat',{connectionId:id});
     this.overview().then(o=>this.push('overview',o),()=>{});
     for(const r of this.bridge.requests.values())this.push('approval',simplifyRequest(r));
     for(const a of this.claude.approvals.values())this.push('approval',a.request);
     // A stale Claude reading is refreshed in the background when the phone connects.
     this.claudeUsage.read().then(u=>{if(!u||this.now()-u.at>10*60*1000)return this.refreshClaudeUsage();}).catch(()=>{});
   }
-  endStream(){const s=this.stream;if(!s)return;this.stream=null;clearInterval(s.ping);try{s.res.end();}catch{}}
+  endStream(){const s=this.stream;if(!s)return;this.stream=null;clearInterval(s.ping);clearTimeout(s.lease);try{s.res.end();}catch{}}
+  renewStream(stream){
+    stream.lastAck=this.now();clearTimeout(stream.lease);
+    const lease=setTimeout(()=>{if(this.stream===stream&&stream.lease===lease){this.endStream();this.changed();}},PHONE_LEASE);
+    stream.lease=lease;lease.unref?.();
+  }
+  expireStream(){
+    if(!this.stream||this.now()-this.stream.lastAck<PHONE_LEASE)return false;
+    this.endStream();this.changed();return true;
+  }
+  heartbeat(device,id){
+    this.expireStream();const stream=this.stream;
+    if(!stream||stream.device!==device||stream.id!==id)return {connected:false};
+    this.renewStream(stream);this.lastSeen=this.now();return {connected:true};
+  }
+  disconnect(device,id){
+    if(this.stream?.device===device&&this.stream.id===id){this.endStream();this.changed();}
+    return {connected:false};
+  }
   push(event,data){
     const s=this.stream;if(!s)return;
     try{s.res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);}catch{}
@@ -247,13 +291,15 @@ class PhoneRemote extends EventEmitter{
     const error=await this.verify(body.d,body.t,body.n,req.headers['x-pad-signature'],['POST','/api/call',raw].join('\n'));
     if(error){if(error[0]===403)this.fail(ip);return this.reply(res,error[0],{error:error[1]});}
     const args=body.args&&typeof body.args==='object'&&!Array.isArray(body.args)?body.args:{};
-    try{return this.reply(res,200,{ok:true,result:await this.command(String(body.cmd||''),args)});}
+    try{return this.reply(res,200,{ok:true,result:await this.command(String(body.cmd||''),args,body.d)});}
     catch(e){return this.reply(res,200,{ok:false,error:publicError(e).message,code:publicError(e).code});}
   }
   // ---------- commands (the complete list a phone may call) ----------
-  async command(cmd,args){
+  async command(cmd,args,device){
     switch(cmd){
       case 'hello':return {version:this.version};
+      case 'heartbeat':return this.heartbeat(device,String(args.connectionId||''));
+      case 'disconnect':return this.disconnect(device,String(args.connectionId||''));
       case 'overview':return this.overview();
       case 'refreshQuota':await this.service.refreshAll();return this.overview();
       case 'useAccount':this.service.get(String(args.id));await this.actions.selectAccount(String(args.id));return this.overview();

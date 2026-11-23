@@ -565,11 +565,34 @@ test('a paired phone hides the QR code until asked, and a new code needs confirm
   const w=dom(t,true,s=>{s.phone={status:'ready',port:47860,ips:['192.168.1.23'],paired:true,phoneConnected:true,lastSeen:null,activeTurns:0,error:null};});await settle();await settle();const d=w.document;
   const qrCalls=[],base=w.pad.action;w.pad.action=async(c,a)=>{if(c==='phoneQR'){qrCalls.push(a);return {ok:false,error:{code:'PHONE_STOPPED',message:'Bật kết nối điện thoại trước.'}};}return base(c,a);};
   assert.equal(d.querySelector('#phone-state').textContent,'Điện thoại đang kết nối');
+  assert.equal(d.querySelector('#phone-address').textContent,'http://192.168.1.23:47860','the address remains available while a paired phone keeps its QR hidden');
   assert(d.querySelector('#phone-qr-img').classList.contains('hidden'));assert(!d.querySelector('#phone-qr-show').classList.contains('hidden'));
   assert.equal(qrCalls.length,0,'a hidden QR code is not fetched');
   d.querySelector('#phone-qr-show').click();for(let i=0;i<5;i++)await settle();
-  assert.equal(qrCalls.length,1,'a failing QR request is not retried on every render');assert(!d.querySelector('#phone-qr-img').classList.contains('hidden'));
+  assert.equal(qrCalls.length,1,'a failing QR request is not retried on every render');assert(d.querySelector('#phone-qr-img').classList.contains('hidden'));assert(!d.querySelector('#phone-qr-show').classList.contains('hidden'));
   const calls=[];const action=w.pad.action;w.pad.action=async(c,a)=>{calls.push(c);return action(c,a);};
   d.querySelector('#phone-reset').click();assert(!calls.includes('phoneReset'),'reset waits for confirmation');
   d.querySelector('#modal-form').dispatchEvent(new w.Event('submit',{cancelable:true}));await settle();assert(calls.includes('phoneReset'));
+});
+
+test('resetting phone pairing waits for the new key and ignores a late QR response from the previous key',async t=>{
+  const w=dom(t,true,s=>{s.phone={status:'ready',port:47860,ips:['192.168.1.23'],pairingVersion:'old-version',paired:true,phoneConnected:false,activeTurns:0};});await settle();
+  const d=w.document,base=w.pad.action;let finishOld,finishReset;const calls=[];
+  w.pad.action=async(command,args)=>{
+    calls.push(command);
+    if(command==='phoneQR'){
+      if(args.pairingVersion==='old-version')return new Promise(r=>finishOld=r);
+      return {ok:true,result:{pairingVersion:'new-version',ip:'192.168.1.23',ips:['192.168.1.23'],svg:'<svg>new-code</svg>'}};
+    }
+    if(command==='phoneReset')return new Promise(r=>finishReset=r);
+    return base(command,args);
+  };
+  d.querySelector('#phone-qr-show').click();await settle();assert(finishOld);
+  d.querySelector('#phone-reset').click();d.querySelector('#modal-form').dispatchEvent(new w.Event('submit',{cancelable:true}));await settle();
+  assert.equal(calls.filter(c=>c==='phoneQR').length,1,'no QR is requested while rotation is unfinished');
+  const state=(await base('state')).result;state.phone={...state.phone,status:'ready',port:47860,ips:['192.168.1.23'],pairingVersion:'new-version',paired:false,phoneConnected:false};
+  finishReset({ok:true,state});await settle();await settle();
+  const img=d.querySelector('#phone-qr-img');assert(decodeURIComponent(img.src).includes('new-code'));
+  finishOld({ok:true,result:{pairingVersion:'old-version',ip:'192.168.1.23',ips:['192.168.1.23'],svg:'<svg>revoked-code</svg>'}});await settle();await settle();
+  assert(decodeURIComponent(img.src).includes('new-code'));assert(!decodeURIComponent(img.src).includes('revoked-code'));
 });
