@@ -259,3 +259,13 @@ h1 { font-size:34px; font-weight:600; letter-spacing:-1.25px; }
   .reset-panel { margin-top:8px; padding-block:8px; }
   .detail-management { margin-top:12px; padding-top:10px; }
 }
+
+/* Phone remote: a full-width card, the QR code beside the instructions. */
+.phone-card { grid-column:1/-1; }
+.phone-layout { display:grid; grid-template-columns:minmax(0,1fr) 240px; gap:28px; align-items:start; }
+.phone-mark .icon { width:26px; height:26px; }
+.phone-qr { display:flex; flex-direction:column; align-items:center; gap:10px; padding:16px; border-radius:16px; background:var(--surface-soft); border:1px solid var(--line); text-align:center; }
+.phone-qr img { width:208px; height:208px; border-radius:10px; background:#fff; image-rendering:pixelated; }
+.phone-qr select { width:100%; }
+.phone-qr small { color:var(--muted); }
+@media (max-width:860px) { .phone-layout { grid-template-columns:1fr; } .phone-qr { justify-self:start; } }

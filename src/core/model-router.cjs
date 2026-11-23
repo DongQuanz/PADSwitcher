@@ -7,8 +7,8 @@ const zlib=require('node:zlib');
 const {exhaustedSnapshot}=require('./recovery.cjs');
 const {createUsage,observeUsage}=require('./model-usage.cjs');
 const MAX_BODY=64*1024*1024,MAX_PEEK=128*1024,MAX_ERROR=1024*1024;
-// Native Codex 0.164 repeats one step up to 30 times with default settings (5 × 6,
-// measured in VALIDATION.md). This limit sits above that budget: it stops only a
+// Native Codex 0.164 repeats one step up to 30 times with default settings (5 × 6).
+// This limit sits above that budget: it stops only a
 // runaway loop and must never cut native retries short.
 const UNCERTAIN_ATTEMPT_LIMIT=32;
 const ROUTES=new Map([['responses','POST'],['responses/compact','POST'],['responses/lite','POST'],['models','GET'],['web_search','POST']]);

@@ -550,3 +550,26 @@ test('English mode leaves no Vietnamese in static text or control labels',async 
   for(let node;(node=walker.nextNode());){const text=node.textContent.trim();if(text&&vietnamese.test(text)&&!node.parentElement.closest('[data-literal],.avatar,script,style'))left.push(text.slice(0,90));}
   assert.deepEqual(left,[]);
 });
+test('phone card turns on, shows the QR code and never puts the pairing secret in app state',async t=>{
+  const w=dom(t);await settle();const d=w.document;
+  assert(d.querySelector('#phone-qr').classList.contains('hidden'));assert.equal(d.querySelector('#phone-state').textContent,'Đang tắt');
+  d.querySelector('#phone-toggle').click();await settle();await settle();
+  assert.equal(d.querySelector('#phone-state').textContent,'Chờ quét mã');
+  const img=d.querySelector('#phone-qr-img');assert(!img.classList.contains('hidden'));assert.match(img.src,/^data:image\/svg\+xml/);
+  assert.equal(d.querySelector('#phone-address').textContent,'http://192.168.1.23:47860');
+  assert.deepEqual([...d.querySelector('#phone-ip').options].map(o=>o.value),['192.168.1.23','10.0.0.5']);
+  const state=(await w.pad.action('state')).result;assert(!JSON.stringify(state.phone).includes('#k='),'the secret only travels in the QR response');
+  d.querySelector('#language-toggle').click();await settle();assert.equal(d.querySelector('#phone-state').textContent,'Waiting for scan');
+});
+test('a paired phone hides the QR code until asked, and a new code needs confirmation',async t=>{
+  const w=dom(t,true,s=>{s.phone={status:'ready',port:47860,ips:['192.168.1.23'],paired:true,phoneConnected:true,lastSeen:null,activeTurns:0,error:null};});await settle();await settle();const d=w.document;
+  const qrCalls=[],base=w.pad.action;w.pad.action=async(c,a)=>{if(c==='phoneQR'){qrCalls.push(a);return {ok:false,error:{code:'PHONE_STOPPED',message:'Bật kết nối điện thoại trước.'}};}return base(c,a);};
+  assert.equal(d.querySelector('#phone-state').textContent,'Điện thoại đang kết nối');
+  assert(d.querySelector('#phone-qr-img').classList.contains('hidden'));assert(!d.querySelector('#phone-qr-show').classList.contains('hidden'));
+  assert.equal(qrCalls.length,0,'a hidden QR code is not fetched');
+  d.querySelector('#phone-qr-show').click();for(let i=0;i<5;i++)await settle();
+  assert.equal(qrCalls.length,1,'a failing QR request is not retried on every render');assert(!d.querySelector('#phone-qr-img').classList.contains('hidden'));
+  const calls=[];const action=w.pad.action;w.pad.action=async(c,a)=>{calls.push(c);return action(c,a);};
+  d.querySelector('#phone-reset').click();assert(!calls.includes('phoneReset'),'reset waits for confirmation');
+  d.querySelector('#modal-form').dispatchEvent(new w.Event('submit',{cancelable:true}));await settle();assert(calls.includes('phoneReset'));
+});

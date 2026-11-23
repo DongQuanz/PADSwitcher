@@ -32,9 +32,34 @@ Sandboxing and tool approvals stay with native Codex.
 
 Account fallback is opt-in, limited to supported personal accounts and confirmed
 quota rejection before output. Reset credits require explicit confirmation.
-See [Windows routing](https://github.com/DongQuanz/PADSwitcher/blob/main/ROUTING.en.md)
-and [Unix routing](https://github.com/padduwcs/PADSwitcher/blob/feature/cross-platform/docs/architecture/ROUTING.en.md)
-for edition-specific behavior and validation.
+
+## Phone connection (Windows)
+
+The optional phone server is separate from the loopback Codex gateway. It binds
+to IPv4 interfaces on a local port (47860–47869), accepts private-network and
+loopback peers, and is off at every app launch. Enable firewall access only for
+private networks; do not expose it with port forwarding or a public tunnel.
+
+The QR fragment contains a pairing secret. The computer keeps it in
+`data/phone/pairing.json` under the protected app-data directory; the phone stores
+it in browser localStorage. Treat both as credentials. API calls use HMAC with
+timestamps and nonces, and only one device is paired at a time. Showing the QR
+opens a ten-minute window for another device holding the secret to take over.
+Creating a new code revokes the previous secret and disconnects the old browser.
+
+Transport uses HTTP, without TLS. HMAC authenticates requests but does not encrypt
+session text, prompts, tool approvals or account/quota information in transit;
+the browser also downloads its application code over HTTP. Use only a trusted
+local network. A paired phone can send prompts, approve tools, switch Codex
+accounts and run Say hi, which can consume inference quota. It cannot export
+saved credentials or consume reset credits through the remote command list.
+
+Codex and Claude turns keep their recorded sandbox/permission mode, including a
+previously selected full-access mode. Only approvals the provider requests are
+shown on the phone. Claude sessions open elsewhere must be branched before the
+phone writes to them. The optional Claude status line edits
+`~/.claude/settings.json` only after the desktop setup action; it records usage,
+not sign-in credentials.
 
 ## Kaggle terminals
 

@@ -1,13 +1,13 @@
 # Contributing to PADSwitcher
 
-[Documentation](docs/README.md) · [Code of Conduct](CODE_OF_CONDUCT.md)
+[README](README.en.md) · [Code of Conduct](CODE_OF_CONDUCT.md)
 
 ## Choose the edition first
 
-| Change targets | Base branch | Development guide |
-| --- | --- | --- |
-| Windows | `main` | [Windows setup](https://github.com/DongQuanz/PADSwitcher/blob/main/docs/DEVELOPMENT.md) |
-| Linux/macOS | `feature/cross-platform` | [Unix setup](https://github.com/padduwcs/PADSwitcher/blob/feature/cross-platform/docs/DEVELOPMENT.md) |
+| Change targets | Base branch |
+| --- | --- |
+| Windows | `main` |
+| Linux/macOS (upstream) | `feature/cross-platform` |
 
 Create a topic branch from the appropriate base and target that same branch in
 your pull request. Do not merge the Unix app into Windows to update shared docs.
@@ -44,8 +44,7 @@ npm run smoke:say-hi
 ```
 
 Unix account routing additionally has `smoke:faults`, `smoke:continuity` and
-`smoke:desktop`. Follow the selected edition's development guide for the keyring,
-UI, Python contract and packaged checks; platform-specific commands differ.
+`smoke:desktop`. UI, Python contract and packaged checks are platform-specific.
 Packaging changes need a build and that edition's packaged smoke checks.
 
 Routine checks use synthetic accounts, local model replies and disposable homes.

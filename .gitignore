@@ -14,3 +14,7 @@ __pycache__/
 *.user
 Thumbs.db
 Desktop.ini
+docs/
+/VALIDATION.md
+/ROUTING.md
+/ROUTING.en.md

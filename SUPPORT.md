@@ -1,6 +1,6 @@
 # Support
 
-Start with the [documentation index](docs/README.md) and the app's Help page.
+Start with the [README](README.en.md) and the app's Help page.
 
 1. Choose the installation guide for **Windows** or **Linux/macOS**.
 2. Check the guide for the affected Codex/Kaggle integration.

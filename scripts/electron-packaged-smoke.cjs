@@ -39,6 +39,8 @@ app.disableHardwareAcceleration();
         }
       };
       const kgState=await action('state');assert.deepEqual(kgState.result.kaggle.accounts,[]);
+      assert.equal(kgState.result.phone.status,'stopped');assert.equal(kgState.result.phone.activeTurns,0);
+      assert.equal(Object.hasOwn(kgState.result.phone,'secret'),false);
       assert.deepEqual(kgState.result.sayHi,{active:false,rows:[]});
       const sayHiControls=await win.webContents.executeJavaScript("({allPresent:!!document.querySelector('#say-hi-all'),allDisabled:document.querySelector('#say-hi-all').disabled,panelHidden:document.querySelector('#say-hi-panel').classList.contains('hidden')})");
       assert.deepEqual(sayHiControls,{allPresent:true,allDisabled:true,panelHidden:true});
@@ -85,5 +87,9 @@ app.disableHardwareAcceleration();
     }catch(e){clearTimeout(timer);await rpc?.close();const location=String(e.stack||'').split('\n').find(line=>line.includes('electron-packaged-smoke.cjs:'));console.error('Packaged verification failed:',e.code||e.name,e.code==='ERR_ASSERTION'?e.message:'',location?.trim()||'');app.exit(1);}
   }));
   const packagedRoot=path.resolve(process.env.PADSWITCHER_PACKAGED_ROOT||'dist/win-unpacked');
+  const sdkFile=path.join(packagedRoot,'resources/app.asar/node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs');
+  const sdk=await import(require('node:url').pathToFileURL(sdkFile).href);
+  for(const name of ['query','listSessions','getSessionInfo','getSessionMessages'])assert.equal(typeof sdk[name],'function',name);
+  console.log('Packaged Claude SDK imports without starting a session: passed.');
   require(path.join(packagedRoot,'resources/app.asar/src/main.cjs'));
 })().catch(e=>{clearTimeout(timer);console.error('Packaged QA could not initialize:',e.code||e.name,e.message);app.exit(1);});

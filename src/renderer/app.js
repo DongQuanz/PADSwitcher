@@ -98,6 +98,7 @@ function render() {
   const g=gatewayForScope()||{status:'stopped'};
   renderConnectionStatus(state.gateway||g);
   renderRoutes();
+  renderPhone();
   $('#shared-auto-status').textContent='Tự chuyển khi hết quota: '+(state.autoSwitch?.enabled?'Bật':'Tắt');
   const desktop=state.desktop||{},desktopProfile=state.profiles.find(p=>p.id===desktop.profileId);
   $('.desktop-card').classList.remove('hidden');
@@ -444,3 +445,64 @@ function desktopLaunchDialog(id){
 $('#open-desktop-connected').onclick=()=>desktopLaunchDialog(state.gateway?.profileId);
 $('#disconnect-desktop').onclick=()=>showModal('Gỡ kết nối desktop','<p>Thoát desktop trước khi tiếp tục. Sau khi gỡ, mở ChatGPT/Codex từ menu hệ thống để dùng lại đăng nhập ban đầu. Hội thoại và tệp đăng nhập cũ được giữ nguyên.</p>',async()=>{closeModal();await call('desktopDisconnect',{},'Đã gỡ kết nối desktop.');},'Gỡ kết nối desktop');
 $('#desktop-home-pick').onclick=async()=>{const r=await call('pick',{kind:'desktopCodexHome'});if(r?.result)await call('desktopHome',{home:r.result});};
+
+// Phone remote. The QR code holds the pairing secret, so it is fetched on demand and
+// hidden again once a phone is paired; the app state only says whether one is.
+let phoneQrKey=null,phoneIp=null,phoneQrShown=false,phoneQrFlight=null,phoneWasConnected=false,phoneQrTimer=null;
+// A shown code can re-pair a phone for 10 minutes; hide it once a phone is in, or after that.
+function showPhoneQr(){phoneQrShown=true;phoneQrKey=null;clearTimeout(phoneQrTimer);phoneQrTimer=setTimeout(()=>{phoneQrShown=false;if(state)render();},10*60*1000);}
+function renderPhone(){
+  const p=state.phone||{status:'stopped'},on=p.status==='ready',g=state.gateway||{};
+  $('#phone-state').textContent=p.status==='starting'?'Đang bật…':p.status==='error'?'Chưa bật được':!on?'Đang tắt':p.phoneConnected?'Điện thoại đang kết nối':p.paired?'Đã ghép nối · chờ điện thoại':'Chờ quét mã';
+  $('#phone-state').className=on&&p.phoneConnected?'status-good':'status-waiting';
+  $('#phone-address').textContent=on&&phoneIp?'http://'+phoneIp+':'+p.port:'—';
+  $('#phone-next').textContent=p.status==='error'?p.error||'':!on?'':p.activeTurns?'Điện thoại đang có lượt Codex hoặc Claude chạy.':g.status!=='ready'?'Kết nối Codex đang tắt. Chọn tài khoản Codex trên máy tính hoặc điện thoại để dùng session Codex.':'';
+  $('#phone-next').classList.toggle('hidden',!$('#phone-next').textContent);
+  $('#phone-toggle').textContent=on||p.status==='starting'?'Tắt kết nối điện thoại':'Bật cho điện thoại';
+  $('#phone-toggle').className='button '+(on?'secondary':'primary');
+  $('#phone-toggle').disabled=p.status==='starting';
+  $('#phone-reset').disabled=!on;
+  const claude=p.claudeStatusLine||'unknown';
+  $('#phone-claude').textContent=claude==='installed'?'Ghi qua status line':claude==='foreign'?'Claude Code đã có status line khác':claude==='missing'?'Chưa bật':'Chưa đọc được cấu hình';
+  $('#phone-claude').className=claude==='installed'?'status-good':'status-waiting';
+  $('#phone-claude-toggle').textContent=claude==='installed'?'Gỡ quota Claude':'Bật quota Claude';
+  $('#phone-claude-toggle').disabled=!['installed','missing'].includes(claude);
+  mark('#phone-claude-toggle',isRunning('claudeStatusLine'));
+  mark('#phone-toggle',isRunning('phoneStart')||isRunning('phoneStop'));mark('#phone-reset',isRunning('phoneReset'));
+  if(p.phoneConnected&&!phoneWasConnected&&p.paired){phoneQrShown=false;clearTimeout(phoneQrTimer);}
+  phoneWasConnected=!!p.phoneConnected;
+  const showQr=on&&(!p.paired||phoneQrShown);
+  $('#phone-qr').classList.toggle('hidden',!on);
+  $('#phone-qr-img').classList.toggle('hidden',!showQr);
+  $('#phone-ip').classList.toggle('hidden',!showQr||$('#phone-ip').options.length<2);
+  $('#phone-qr-show').classList.toggle('hidden',showQr);
+  $('#phone-qr-note').textContent=showQr?'Quét bằng camera điện thoại':'Đã ghép nối. Mã QR được ẩn để người khác không quét được. Điện thoại mất kết nối thì bấm Hiện mã QR rồi quét lại.';
+  if(!on){phoneQrKey=null;phoneQrShown=false;return;}
+  const key=p.port+'|'+(phoneIp||'');
+  if(showQr&&key!==phoneQrKey&&!phoneQrFlight)loadPhoneQr(key);
+}
+async function loadPhoneQr(key){
+  phoneQrKey=key;
+  phoneQrFlight=api.action('phoneQR',{ip:phoneIp,locale:ui.language}).then(response=>{
+    // Keep the failed key: retrying on every render would loop. A new port, address or
+    // the Show button asks again.
+    if(!response.ok){toast(ui.error(response.error),true);return;}
+    const q=response.result;phoneIp=q.ip;phoneQrKey=state.phone.port+'|'+q.ip;
+    $('#phone-qr-img').src='data:image/svg+xml;charset=utf-8,'+encodeURIComponent(q.svg);
+    const select=$('#phone-ip');select.innerHTML=q.ips.map(ip=>'<option'+(ip===q.ip?' selected':'')+'>'+e(ip)+'</option>').join('');
+  }).catch(()=>{}).finally(()=>{phoneQrFlight=null;if(state)render();});
+}
+$('#phone-ip').onchange=event=>{phoneIp=event.target.value;phoneQrKey=null;render();};
+$('#phone-qr-show').onclick=()=>{showPhoneQr();render();};
+$('#phone-toggle').onclick=async()=>{
+  const on=['ready','starting'].includes(state.phone?.status);
+  if(on){await call('phoneStop');return;}
+  if(await call('phoneStart'))toast(state.phone?.paired?'Đã bật. Mở lại trang PADSwitcher trên điện thoại đã ghép nối.':'Đã bật. Quét mã QR bằng camera điện thoại.');
+};
+$('#phone-reset').onclick=()=>showModal('Tạo mã kết nối mới?','<p>Điện thoại đang ghép nối sẽ bị ngắt và phải quét mã mới. Dùng khi đổi điện thoại hoặc nghi mã đã bị lộ.</p>',async()=>{closeModal();showPhoneQr();await call('phoneReset',{},'Đã tạo mã mới. Quét lại bằng điện thoại.');},'Tạo mã mới');
+
+$('#phone-claude-toggle').onclick=()=>{
+  const on=state.phone?.claudeStatusLine==='installed';
+  if(on){call('claudeStatusLine',{enabled:false},'Đã gỡ status line quota khỏi Claude Code.');return;}
+  showModal('Bật quota Claude?','<p>PADSwitcher thêm một status line vào <code data-literal>~/.claude/settings.json</code>. Mỗi khi Claude Code chạy, nó ghi phần trăm quota 5 giờ và 7 ngày vào thư mục dữ liệu PADSwitcher, rồi hiện một dòng ngắn dưới khung nhập của Claude Code.</p><p>Không đọc thông tin đăng nhập. Gỡ bất cứ lúc nào bằng nút này.</p>',async()=>{closeModal();await call('claudeStatusLine',{enabled:true},'Đã bật. Quota Claude sẽ cập nhật ở lần Claude Code chạy tiếp theo.');},'Bật quota Claude');
+};

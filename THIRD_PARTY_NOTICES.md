@@ -12,6 +12,11 @@ PADSwitcher source is licensed under [MIT](LICENSE).
 - Codex is a separate OpenAI product. PADSwitcher does not bundle the Codex binary;
   it uses a locally installed compatible version. OpenAI and Codex names belong to
   their respective owners. PADSwitcher is an independent project.
+- **@anthropic-ai/claude-agent-sdk** is included for the phone's Claude integration.
+  It retains Anthropic's copyright and license terms in the package's `LICENSE.md`;
+  it is not covered by PADSwitcher's MIT license. Platform-specific Claude Code
+  binaries from the SDK are excluded from the Windows build; running Claude
+  sessions requires the user's installed Claude Code and its own sign-in.
 
 - JetBrains setup copies the user's installed **@agentclientprotocol/codex-acp 2.1.1**
   standalone adapter into the private app-data runtime. The adapter is Apache-2.0

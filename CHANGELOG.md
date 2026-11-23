@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- An opt-in phone connection on the local Wi-Fi/LAN: pair one browser by QR code,
+  browse Codex and Claude sessions, send prompts, approve tools, interrupt turns
+  and open sessions on the computer. New sessions use existing project folders
+  and inherit the last recorded permission mode.
+- Codex account/quota controls, Claude usage and Kaggle notebook status on the
+  phone. An optional Claude Code status line records usage for the phone view.
+- The phone connection starts off at every launch, supports pairing-code rotation
+  and stops after 30 minutes without a connected phone or active phone turn.
+
 ## 1.21.1 — 2026-11-20
 
 Maintained in the [DongQuanz fork](https://github.com/DongQuanz/PADSwitcher) by
@@ -123,8 +136,6 @@ Maintained in the [DongQuanz fork](https://github.com/DongQuanz/PADSwitcher) by
   install plugins, preventing tests from attaching to a user's running backend.
 - Reproduce 503 and early SSE recovery through the real native engine; retain
   single-attempt protection for connection loss, incomplete output and timeout.
-- Document a development-fixture plugin left in the maintainer's real Codex home,
-  its precise removal and the validation limits. See VALIDATION.md.
 
 ## 1.20.1 — 2026-10-28
 
@@ -143,7 +154,7 @@ Maintained in the [DongQuanz fork](https://github.com/DongQuanz/PADSwitcher) by
   connection, existing native thread and a synthetic quota fallback while the GUI
   remains connected. Original authentication/configuration stay in the fixture.
 - Add native restricted-policy/failure/sign-out guards and deterministic shutdown
-  cancellation coverage. See VALIDATION.md for the exact scope.
+  cancellation coverage.
 
 ## 1.20.0 — 2026-10-28
 
@@ -184,9 +195,9 @@ Maintained in the [DongQuanz fork](https://github.com/DongQuanz/PADSwitcher) by
 
 Desktop GUI acceptance on a closed, ordinary Windows installation remains a
 manual check. Native desktop routing, account verification, history/resume and
-MCP named-pipe fixtures are automated. See VALIDATION.md for exact coverage.
+MCP named-pipe fixtures are automated.
 
-Notable changes to PADSwitcher are documented here. The project follows [Semantic Versioning](https://semver.org/); detailed test evidence and known limits are in [VALIDATION.md](VALIDATION.md).
+Notable changes to PADSwitcher are documented here. The project follows [Semantic Versioning](https://semver.org/).
 
 ## 1.19.1 — 2026-10-11
 

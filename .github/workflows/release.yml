@@ -97,7 +97,7 @@ jobs:
             if ($draft -ne 'true') { throw 'Refusing to overwrite a public release.' }
             gh release upload $env:GITHUB_REF_NAME --clobber @assets
           } else {
-            gh release create $env:GITHUB_REF_NAME --verify-tag --draft --title "PADSwitcher $version" --notes-file "docs/releases/v$version.md" @assets
+            gh release create $env:GITHUB_REF_NAME --verify-tag --draft --title "PADSwitcher $version" --generate-notes @assets
           }
           if ($LASTEXITCODE -ne 0) { throw 'Draft upload failed.' }
           $api = gh release view $env:GITHUB_REF_NAME --json apiUrl --jq '.apiUrl'

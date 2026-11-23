@@ -12,7 +12,19 @@ const { DesktopIntegration } = require('./core/desktop.cjs');
 const { syncManagerLauncher } = require('./core/manager-launcher.cjs');
 const { Updater, RELEASE_PAGE, CHECK_INTERVAL } = require('./core/updater.cjs');
 const { UserError, publicError } = require('./core/errors.cjs');
-let window, service, kaggle, gateway, integration, jetbrains, desktop, updater, tray, timer, kaggleTimer, integrationTimer, updateTimer, integrationFlight, quitting = false, shutdown = false;
+const { PhoneRemote, PHONE_LINK } = require('./remote/phone-server.cjs');
+const { SESSION_ID } = require('./remote/claude-bridge.cjs');
+const { ps } = require('./core/windows.cjs');
+// Claude Code resuming one session, in that session's folder, in a new terminal window.
+// Values reach PowerShell as environment variables, never as script text.
+async function openClaudeTerminal({ file, cwd, sessionId } = {}) {
+  const exe = String(file || ''), folder = String(cwd || ''), id = String(sessionId || '');
+  if (!SESSION_ID.test(id) || !path.isAbsolute(exe) || path.basename(exe).toLowerCase() !== 'claude.exe' || !fs.statSync(exe, { throwIfNoEntry: false })?.isFile()
+    || !path.isAbsolute(folder) || !fs.statSync(folder, { throwIfNoEntry: false })?.isDirectory()) throw new Error('Blocked terminal.');
+  await ps("$ErrorActionPreference='Stop'; Start-Process -FilePath $env:PAD_CLAUDE -ArgumentList @('--resume',$env:PAD_SESSION) -WorkingDirectory $env:PAD_CWD",
+    { env: { ...process.env, PAD_CLAUDE: exe, PAD_CWD: folder, PAD_SESSION: id } });
+}
+let window, service, kaggle, gateway, integration, jetbrains, desktop, updater, phone, tray, timer, kaggleTimer, integrationTimer, updateTimer, integrationFlight, quitting = false, shutdown = false;
 let uiLocale='vi';
 const text=(vi,en)=>uiLocale==='en'?en:vi;
 const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
@@ -64,7 +76,7 @@ function updateLauncher() {
 // The replacement starts after this process exits, so nothing may keep it alive.
 function quitForUpdate() {
   shutdown=true;clearInterval(timer);clearInterval(kaggleTimer);clearInterval(integrationTimer);clearInterval(updateTimer);
-  const finished=Promise.allSettled([service.close(),gateway.stop(true),kaggle.shutdown()]);
+  const finished=Promise.allSettled([phone.stop(true),service.close(),gateway.stop(true),kaggle.shutdown()]);
   Promise.race([finished,new Promise(resolve=>setTimeout(resolve,15000))]).finally(()=>{quitting=true;tray?.destroy();app.quit();});
 }
 async function start() {
@@ -89,6 +101,11 @@ async function prepare() {
   kaggle.on('change',()=>service.changed());
   updater=new Updater({current:app.getVersion(),executable:portableExecutable(),root:service.root,platform:service.platform,onChange:()=>service.changed()});service.updater=updater;
   gateway=new GatewayHub(service);integration=new Integration(service);jetbrains=new JetBrainsIntegration(service);desktop=new DesktopIntegration(service,gateway);
+  // Off at every launch; the user turns it on from Connections when the phone is needed.
+  phone=new PhoneRemote({root:service.root,service,gateway,version:app.getVersion(),actions:{selectAccount:async id=>{await gateway.start(id);await updateLauncher();},
+    // Only the two session links the phone server builds may be opened from the phone.
+    openLink:async url=>{if(!PHONE_LINK.test(String(url)))throw new Error('Blocked link.');await shell.openExternal(url);},
+    openTerminal:openClaudeTerminal}});service.phone=phone;
   // Probing installed apps starts PowerShell/WMI; do it after the window is up.
   await desktop.init({probe:false});
 }
@@ -180,6 +197,17 @@ async function openWindow() {
           const child=spawn(service.platform.powershell,['-NoProfile','-NonInteractive','-EncodedCommand',Buffer.from(outer,'utf16le').toString('base64')],{env,stdio:'ignore',windowsHide:true});
           await new Promise((r,j)=>{child.once('error',j);child.once('close',code=>code===0?r():j(new UserError('Không mở được terminal.', 'CLI_START')));});break;
         }
+        case 'phoneStart': result=await phone.start();break;
+        case 'phoneStop': {
+          if(phone.view().activeTurns){
+            const answer=await dialog.showMessageBox(window,{type:'warning',buttons:[text('Giữ kết nối','Keep connected'),text('Tắt và dừng lượt đó','Turn off and stop that turn')],defaultId:0,cancelId:0,message:text('Điện thoại còn lượt đang chạy','A phone turn is still running'),detail:text('Tắt kết nối điện thoại sẽ ngắt các lượt Codex và Claude do điện thoại gửi.','Turning off the phone connection interrupts Codex and Claude turns sent from the phone.')});
+            if(answer.response!==1)break;
+          }
+          await phone.stop(true);break;
+        }
+        case 'phoneReset': await phone.resetPairing();break;
+        case 'claudeStatusLine': result=args.enabled===true?await phone.claudeUsage.install():await phone.claudeUsage.remove();service.changed();break;
+        case 'phoneQR': result=phone.qr(typeof args.ip==='string'?args.ip:null);break;
         case 'updateCheck': result = await updater.check(); break;
         case 'updateDownload': result = await updater.download(); break;
         case 'updateCancel': updater.cancel(); break;
@@ -268,10 +296,10 @@ async function openWindow() {
     if(quitting)return;
     if(service?.foregroundBusy||desktop?.flight||kaggle?.editing){event.preventDefault();if(service.login)service.cancelLogin();return;}
     if(gateway.turns.size){event.preventDefault();window.show();dialog.showMessageBox(window,{type:'info',message:text('Codex còn lượt đang chạy','Codex has active turns'),detail:text('Chờ hoàn tất hoặc chọn Dừng gateway trong PADSwitcher trước khi thoát.','Wait for completion or disconnect Codex in PADSwitcher before quitting.')});return;}
-    if(service.busy||service.sayHi.flight||gateway.status!=='stopped'||kaggle.flights.size||kaggle.toolFlight||kaggle.saveFlight){
+    if(service.busy||service.sayHi.flight||gateway.status!=='stopped'||phone.status!=='stopped'||kaggle.flights.size||kaggle.toolFlight||kaggle.saveFlight){
       event.preventDefault();if(shutdown)return;shutdown=true;
       clearInterval(kaggleTimer);
-      Promise.all([service.close(),gateway.stop(),kaggle.shutdown()]).then(()=>{quitting=true;clearInterval(timer);tray?.destroy();app.quit();},error=>{shutdown=false;service.closing=false;window.show();dialog.showMessageBox(window,{type:'info',message:publicError(error).message});});
+      Promise.all([phone.stop(true),service.close(),gateway.stop(),kaggle.shutdown()]).then(()=>{quitting=true;clearInterval(timer);tray?.destroy();app.quit();},error=>{shutdown=false;service.closing=false;window.show();dialog.showMessageBox(window,{type:'info',message:publicError(error).message});});
     }else{quitting=true;clearInterval(timer);tray?.destroy();}
   });
 }

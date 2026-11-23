@@ -79,7 +79,8 @@ async function checkCodexActions(preview) {
         await preview.loadFile(path.join(fixtureRoot,'index.html'),{search:'demo=1'});
         await preview.webContents.executeJavaScript("document.fonts.ready.then(()=>{for(const weight of [400,500,600])if(!document.fonts.check(weight+' 14px \"Be Vietnam Pro\"','Tài khoản'))throw Error('Local font missing');return true;})");
         await preview.webContents.executeJavaScript("document.querySelector('[data-service=codex]').click()");
-        const layout = await preview.webContents.executeJavaScript("({count:document.querySelectorAll('.account-card').length,overflow:document.documentElement.scrollWidth>document.documentElement.clientWidth,imagesLoaded:[...document.images].every(i=>i.complete&&i.naturalWidth>0)})");
+        // The phone QR image intentionally has no source until the connection is enabled.
+        const layout = await preview.webContents.executeJavaScript("({count:document.querySelectorAll('.account-card').length,overflow:document.documentElement.scrollWidth>document.documentElement.clientWidth,imagesLoaded:[...document.querySelectorAll('img[src]')].every(i=>i.complete&&i.naturalWidth>0)})");
         assert.equal(layout.count,3); assert.equal(layout.overflow,false);
         assert.equal(layout.imagesLoaded,true);
         for(const variant of ['light-vi','dark-en']) {
@@ -139,7 +140,7 @@ async function checkCodexActions(preview) {
         const helpImage = await new Promise(resolve => { preview.webContents.once('paint',(_event,_rect,frame) => resolve(frame.toPNG())); preview.webContents.invalidate(); });
         await fs.writeFile(path.join(root,'help-logo.png'),helpImage);
         preview.setSize(1000,680);
-        const compact = await preview.webContents.executeJavaScript("(async()=>{await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));return {overflow:document.documentElement.scrollWidth>document.documentElement.clientWidth,imagesLoaded:[...document.images].every(i=>i.complete&&i.naturalWidth>0)};})()");
+        const compact = await preview.webContents.executeJavaScript("(async()=>{await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));return {overflow:document.documentElement.scrollWidth>document.documentElement.clientWidth,imagesLoaded:[...document.querySelectorAll('img[src]')].every(i=>i.complete&&i.naturalWidth>0)};})()");
         assert.equal(compact.overflow,false); assert.equal(compact.imagesLoaded,true);
         const compactAccounts=await preview.webContents.executeJavaScript("(async()=>{document.querySelector('[data-page=accounts]').click();await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));return {overflow:document.documentElement.scrollWidth>document.documentElement.clientWidth,ready:document.querySelector('#gateway-status').textContent.includes('Đã kết nối'),enabled:!document.querySelector('#connect-vscode').disabled,actionVisible:document.querySelector('#use-gateway').getBoundingClientRect().bottom<=innerHeight};})()");
         assert.equal(compactAccounts.overflow,false);assert.equal(compactAccounts.ready,true);assert.equal(compactAccounts.enabled,true);
@@ -188,7 +189,7 @@ async function checkCodexActions(preview) {
           await preview.webContents.executeJavaScript("document.querySelector('[data-page=connections]').click()");
           await new Promise(resolve=>setTimeout(resolve,200));
           const connections=await preview.webContents.executeJavaScript("({overflow:document.documentElement.scrollWidth>document.documentElement.clientWidth,count:document.querySelectorAll('.integration-card').length,live:document.querySelector('#jetbrains-live').textContent})");
-          assert.equal(connections.overflow,false);assert.equal(connections.count,4);assert(connections.live.includes(variant.endsWith('en')?'Connected':'Đang kết nối'));
+          assert.equal(connections.overflow,false);assert.equal(connections.count,5);assert(connections.live.includes(variant.endsWith('en')?'Connected':'Đang kết nối'));
           const connectionsFrame=await new Promise(resolve=>{preview.webContents.once('paint',(_event,_rect,image)=>resolve(image.toPNG()));preview.webContents.invalidate();});
           await fs.writeFile(path.join(root,'connections-'+variant+'.png'),connectionsFrame);
           await preview.webContents.executeJavaScript("document.querySelector('[data-page=accounts]').click()");

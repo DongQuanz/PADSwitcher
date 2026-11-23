@@ -6,12 +6,12 @@ This is the independent **DongQuanz/PADSwitcher** fork, based on
 [padduwcs/PADSwitcher](https://github.com/padduwcs/PADSwitcher) under the MIT license.
 Development here targets Windows on `main`; the Linux/macOS builds linked below
 belong to upstream. Windows updates only use this fork's releases. Until a release
-is available, use the [source setup](docs/DEVELOPMENT.md).
+is available, use the [source setup](#clone-and-develop).
 
 Manage **Codex and Kaggle accounts**, inspect quota and automatically switch to
 an available backup Codex account when the current account reaches its limit.
 
-[Tiếng Việt](README.md) · [Documentation](docs/README.md) · [Report a bug](https://github.com/DongQuanz/PADSwitcher/issues/new/choose)
+[Tiếng Việt](README.md) · [Support](SUPPORT.md) · [Report a bug](https://github.com/DongQuanz/PADSwitcher/issues/new/choose)
 
 <a id="downloads"></a>
 ## Download and install
@@ -22,7 +22,7 @@ Linux/macOS run **PADSwitcher Unix**, with separate accounts and data.
 
 | Operating system | Release | Installer | Guide |
 | --- | --- | --- | --- |
-| Windows 10/11 x64 | [Stable](https://github.com/DongQuanz/PADSwitcher/releases/latest) | Portable `Windows.exe` | [English](https://github.com/DongQuanz/PADSwitcher/blob/main/docs/WINDOWS-INSTALL.en.md) |
+| Windows 10/11 x64 | [Stable](https://github.com/DongQuanz/PADSwitcher/releases/latest) | Portable `Windows.exe` | [English](#first-use) |
 | Ubuntu/Debian x64 or ARM64 | [Unix.7 · preview](https://github.com/padduwcs/PADSwitcher/releases/tag/unix-v1.19.1-unix.7) | `.deb` | [English](https://github.com/padduwcs/PADSwitcher/blob/feature/cross-platform/docs/UNIX-INSTALL.en.md) |
 | Other compatible Linux desktops | [Unix.7 · preview](https://github.com/padduwcs/PADSwitcher/releases/tag/unix-v1.19.1-unix.7) | `.AppImage` | [Linux requirements](https://github.com/padduwcs/PADSwitcher/blob/feature/cross-platform/docs/UNIX-INSTALL.en.md) |
 | macOS Intel or Apple Silicon | [Unix.7 · preview](https://github.com/padduwcs/PADSwitcher/releases/tag/unix-v1.19.1-unix.7) | `.dmg` or `.zip` | [English](https://github.com/padduwcs/PADSwitcher/blob/feature/cross-platform/docs/UNIX-INSTALL.en.md) |
@@ -54,33 +54,22 @@ cloud/remote jobs are outside this local Codex connection.
 
 **Kaggle:** open **Services → Kaggle → Setup**, install the tools shown, add your
 API token and open a terminal for the account you want. Each terminal keeps its
-own account selection. Kaggle guides: [Windows](https://github.com/DongQuanz/PADSwitcher/blob/main/docs/KAGGLE.en.md) · [Linux/macOS](https://github.com/padduwcs/PADSwitcher/blob/feature/cross-platform/docs/KAGGLE.en.md).
-
-<p align="center"><img src="docs/images/light.png" width="49%" alt="Light theme"><img src="docs/images/dark.png" width="49%" alt="Dark theme"></p>
+own account selection. Kaggle guides: [Windows](#first-use) · [Linux/macOS](https://github.com/padduwcs/PADSwitcher/blob/feature/cross-platform/docs/KAGGLE.en.md).
 
 ## Clone and develop
 
-Upstream maintains two branches. This fork develops Windows on `main`; Unix instructions below refer to upstream. **Choose the branch when cloning**:
+This fork develops the Windows edition on `main`. Use Windows 10/11 x64,
+Node.js 24.15+ in the 24.x line (or Node 26+) and .NET Framework 4.8.
 
-| Edition | Branch | Setup and run |
-| --- | --- | --- |
-| Windows | `main` | [Windows development](https://github.com/DongQuanz/PADSwitcher/blob/main/docs/DEVELOPMENT.md) |
-| Linux/macOS | `feature/cross-platform` | [Unix development](https://github.com/padduwcs/PADSwitcher/blob/feature/cross-platform/docs/DEVELOPMENT.md) |
-
-Linux/macOS:
-
-```bash
-git clone --branch feature/cross-platform https://github.com/padduwcs/PADSwitcher.git
+```powershell
+git clone --branch main https://github.com/DongQuanz/PADSwitcher.git
 cd PADSwitcher
+npm ci
+npm start
 ```
 
-On Linux, follow the Unix guide's **Linux** section to prepare tools and the
-sandbox. On Mac, follow **macOS**. For Windows, clone with `--branch main`.
-A clone without `--branch` defaults to Windows source.
-
-One checkout is enough; save your changes before switching branches. Installed
-applications run independently of source checkouts. See [Contributing](CONTRIBUTING.md)
-and [using one folder](https://github.com/padduwcs/PADSwitcher/blob/feature/cross-platform/docs/DEVELOPMENT.md#one-folder-and-two-branches).
+Run `npm run check` and `npm test` before contributing. See [Contributing](CONTRIBUTING.md).
+Linux/macOS development belongs to the [upstream repository](https://github.com/padduwcs/PADSwitcher/tree/feature/cross-platform).
 
 ## Contributors
 
@@ -91,8 +80,7 @@ and [using one folder](https://github.com/padduwcs/PADSwitcher/blob/feature/cros
 
 ## Documentation and support
 
-- [Documentation index](docs/README.md) · [Support](SUPPORT.md) · [Security](SECURITY.md)
+- [Support](SUPPORT.md) · [Security](SECURITY.md)
 - [Windows changelog](https://github.com/DongQuanz/PADSwitcher/blob/main/CHANGELOG.md) · [Unix changelog](https://github.com/padduwcs/PADSwitcher/blob/feature/cross-platform/CHANGELOG.md)
-- [Unix validation and limits](https://github.com/padduwcs/PADSwitcher/blob/feature/cross-platform/docs/UNIX-VALIDATION.md)
 
 Released under [MIT](LICENSE). Independent of OpenAI, Kaggle and JetBrains.

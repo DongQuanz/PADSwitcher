@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f2a40">
+<meta name="referrer" content="no-referrer">
+<title>PADSwitcher</title>
+<link rel="stylesheet" href="/phone.css">
+<script src="/sha256.js" defer></script>
+<script src="/phone.js" defer></script>
+</head>
+<body>
+<header class="top">
+  <div class="top-row">
+    <div class="brand"><span class="mark" aria-hidden="true"></span><span>PADSwitcher</span></div>
+    <span class="link" id="link"><span class="dot" id="link-dot"></span><span id="link-text">Đang kết nối</span></span>
+  </div>
+  <h1 class="page-title" id="page-title">Session</h1>
+</header>
+
+<main id="pair-screen" class="screen hidden">
+  <div class="pair">
+    <div class="pair-art" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
+    <h2>Quét mã QR</h2>
+    <p id="pair-message">Trên máy tính, mở PADSwitcher → <b>Kết nối</b> → <b>Điện thoại</b>, bật lên rồi quét mã bằng camera.</p>
+    <p class="muted">Điện thoại và máy tính phải dùng cùng một Wi-Fi.</p>
+    <p class="muted">Lần nào đóng tab cũng phải quét lại? Trình duyệt đang không lưu dữ liệu (tab ẩn danh, trình duyệt trong Zalo/Facebook). Mở bằng Chrome hoặc Safari thường.</p>
+  </div>
+</main>
+
+<main id="sessions-screen" class="screen hidden">
+  <div class="chips" role="tablist" aria-label="Lọc session">
+    <button class="chip active" data-provider="all">Tất cả</button>
+    <button class="chip" data-provider="codex"><span class="glyph codex" aria-hidden="true"></span>Codex</button>
+    <button class="chip" data-provider="claude"><span class="glyph claude" aria-hidden="true"></span>Claude</button>
+  </div>
+  <label class="search"><span class="search-icon" aria-hidden="true"></span><input id="search" type="search" placeholder="Tìm session" autocomplete="off" enterkeyhint="search"></label>
+  <div id="notices"></div>
+  <ul class="list" id="thread-list"></ul>
+  <button class="btn ghost wide hidden" id="threads-more">Xem thêm</button>
+  <button class="fab" id="new-session" aria-label="Session mới"><span aria-hidden="true">+</span></button>
+</main>
+
+<main id="quota-screen" class="screen hidden">
+  <section class="group">
+    <div class="group-head"><h2><span class="glyph codex" aria-hidden="true"></span>Codex</h2><button class="btn small ghost" id="refresh-quota">Cập nhật</button></div>
+    <div class="summary" id="quota-summary"></div>
+    <ul class="list" id="account-list"></ul>
+  </section>
+  <section class="group">
+    <div class="group-head"><h2><span class="glyph claude" aria-hidden="true"></span>Claude</h2><button class="btn small ghost" id="refresh-claude">Cập nhật</button></div>
+    <div id="claude-quota"></div>
+  </section>
+</main>
+
+<main id="kaggle-screen" class="screen hidden">
+  <section class="group">
+    <div class="group-head"><h2><span class="glyph kaggle" aria-hidden="true"></span>Kaggle</h2><button class="btn small ghost" id="refresh-kaggle">Cập nhật</button></div>
+    <ul class="list" id="kaggle-list"></ul>
+  </section>
+</main>
+
+<section id="thread-screen" class="sheet hidden" aria-label="Session">
+  <header class="sheet-head">
+    <button class="icon-btn" id="thread-back" aria-label="Quay lại"><span class="chevron" aria-hidden="true"></span></button>
+    <span class="glyph" id="thread-glyph" aria-hidden="true"></span>
+    <div class="sheet-title"><b id="thread-title"></b><small id="thread-sub"></small></div>
+    <span class="pill" id="thread-status"></span>
+    <button class="icon-btn" id="thread-open" aria-label="Mở trên máy tính" title="Mở trên máy tính"><span class="laptop-icon" aria-hidden="true"></span></button>
+  </header>
+  <div class="banner hidden" id="thread-banner"></div>
+  <div class="feed" id="feed">
+    <button class="btn ghost wide hidden" id="feed-more">Xem các lượt trước</button>
+    <div id="turns"></div>
+    <div id="approvals"></div>
+  </div>
+  <form class="composer" id="composer">
+    <textarea id="prompt" rows="1" placeholder="Nhắn tiếp" enterkeyhint="send"></textarea>
+    <button class="btn danger hidden" type="button" id="stop-turn">Dừng</button>
+    <button class="btn primary send" type="submit" id="send" aria-label="Gửi"><span class="send-icon" aria-hidden="true"></span></button>
+  </form>
+</section>
+
+<section id="new-screen" class="sheet hidden" aria-label="Session mới">
+  <header class="sheet-head">
+    <button class="icon-btn" id="new-back" aria-label="Quay lại"><span class="chevron" aria-hidden="true"></span></button>
+    <div class="sheet-title"><b>Session mới</b><small>Chỉ trong thư mục đã có session</small></div>
+  </header>
+  <div class="segmented" id="new-provider">
+    <button class="seg active" data-provider="codex"><span class="glyph codex" aria-hidden="true"></span>Codex</button>
+    <button class="seg" data-provider="claude"><span class="glyph claude" aria-hidden="true"></span>Claude</button>
+  </div>
+  <div class="feed"><ul class="list folders" id="folder-list"></ul></div>
+  <form class="composer" id="new-form">
+    <textarea id="new-prompt" rows="2" placeholder="Bạn muốn làm gì?"></textarea>
+    <button class="btn primary" type="submit" id="new-send">Bắt đầu</button>
+  </form>
+</section>
+
+<nav class="tabs hidden" id="tabs">
+  <button class="tab active" data-tab="sessions"><span class="tab-icon i-sessions" aria-hidden="true"></span>Session<span class="badge hidden" id="approval-badge"></span></button>
+  <button class="tab" data-tab="quota"><span class="tab-icon i-quota" aria-hidden="true"></span>Quota</button>
+  <button class="tab" data-tab="kaggle"><span class="tab-icon i-kaggle" aria-hidden="true"></span>Kaggle<span class="badge dot-badge hidden" id="kaggle-badge"></span></button>
+</nav>
+<div class="toast hidden" id="toast" role="status"></div>
+</body>
+</html>
